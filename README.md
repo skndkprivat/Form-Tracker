@@ -1,8 +1,8 @@
-# 🏔️ Form-tracker
+# 🏔️ Form-Tracker
 
 CTL/ATL/TSB form-tracker til cykeltræning — bygget med React + Recharts.
 
-**Live app:** https://skndkprivat.github.io/form-tracker/
+**Live app:** https://skndkprivat.github.io/Form-Tracker/
 
 ## Funktioner
 - CTL/ATL/TSB beregning med 42/7-dages eksponentielle gennemsnit
