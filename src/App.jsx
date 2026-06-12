@@ -4,7 +4,6 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer
 } from "recharts";
 
-// ─── helpers ────────────────────────────────────────────────────────────────
 const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
 const fmtDate = (d) => d.toLocaleDateString("da-DK", { weekday: "short", day: "numeric", month: "short" });
 const isoDate = (d) => d.toISOString().slice(0, 10);
@@ -167,7 +166,7 @@ function ImportModal({ onImport, onClose }) {
             ].map(([title, desc]) => (
               <div key={title} className="import-source-card">
                 <div className="import-source-title">{title}</div>
-                <div className="step" style={{color:"#94a3b8",fontSize:12}}>{desc}</div>
+                <div style={{color:"#94a3b8",fontSize:12}}>{desc}</div>
               </div>
             ))}
           </div>
@@ -253,6 +252,7 @@ function ChartTooltip({ active, payload }) {
   );
 }
 
+// ─── Auth wrapper — ingen hooks efter tidlige returns ────────────────────────
 export default function FormTracker() {
   const user = useAuth();
   if (user === undefined) return (
@@ -261,7 +261,11 @@ export default function FormTracker() {
     </div>
   );
   if (!user) return <LoginScreen />;
+  return <AppInner user={user} />;
+}
 
+// ─── Hoved-app — alle hooks her ──────────────────────────────────────────────
+function AppInner({ user }) {
   const [ftp,          setFtp]          = useState(() => LS("ft_ftp", 180));
   const [weight,       setWeight]       = useState(() => LS("ft_weight", 77));
   const [bikeKg,       setBikeKg]       = useState(() => LS("ft_bikeKg", 8.5));
