@@ -19,9 +19,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
 
-export const signInWithGoogle = () => signInWithRedirect(auth, googleProvider);
+const provider = new GoogleAuthProvider();
+provider.setCustomParameters({ prompt: "select_account" });
+
+export const signInWithGoogle = () => signInWithRedirect(auth, provider);
 export const checkRedirectResult = () => getRedirectResult(auth);
 export const signOutUser = () => signOut(auth);
 export const onAuthChange = (cb) => onAuthStateChanged(auth, cb);

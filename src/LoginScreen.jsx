@@ -5,10 +5,22 @@ export function useAuth() {
   const [user, setUser] = useState(undefined);
 
   useEffect(() => {
-    // Tjek om vi er ved at vende tilbage fra Google redirect
-    checkRedirectResult().catch(() => {});
+    // Lyt på auth state ændringer
+    const unsub = onAuthChange(u => {
+      setUser(u);
+    });
 
-    const unsub = onAuthChange(u => setUser(u));
+    // Tjek redirect resultat eksplicit
+    checkRedirectResult()
+      .then(result => {
+        if (result?.user) {
+          setUser(result.user);
+        }
+      })
+      .catch(err => {
+        console.error("Redirect fejl:", err);
+      });
+
     return unsub;
   }, []);
 
@@ -23,9 +35,10 @@ export function LoginScreen() {
     setLoading(true);
     setError("");
     try {
-      await signInWithGoogle(); // sender brugeren til Google og tilbage
+      await signInWithGoogle();
     } catch (e) {
-      setError("Login fejlede — prøv igen.");
+      console.error("Login fejl:", e);
+      setError("Login fejlede — prøv igen. (" + e.code + ")");
       setLoading(false);
     }
   };
