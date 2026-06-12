@@ -1,29 +1,12 @@
 import { useState, useEffect } from "react";
-import { signInWithGoogle, signOutUser, onAuthChange, checkRedirectResult } from "./firebase.js";
+import { signInWithGoogle, signOutUser, onAuthChange } from "./firebase.js";
 
 export function useAuth() {
   const [user, setUser] = useState(undefined);
-
   useEffect(() => {
-    // Lyt på auth state ændringer
-    const unsub = onAuthChange(u => {
-      setUser(u);
-    });
-
-    // Tjek redirect resultat eksplicit
-    checkRedirectResult()
-      .then(result => {
-        if (result?.user) {
-          setUser(result.user);
-        }
-      })
-      .catch(err => {
-        console.error("Redirect fejl:", err);
-      });
-
+    const unsub = onAuthChange(u => setUser(u));
     return unsub;
   }, []);
-
   return user;
 }
 
@@ -37,8 +20,14 @@ export function LoginScreen() {
     try {
       await signInWithGoogle();
     } catch (e) {
-      console.error("Login fejl:", e);
-      setError("Login fejlede — prøv igen. (" + e.code + ")");
+      // auth/popup-blocked = popup blev blokeret af browseren
+      if (e.code === "auth/popup-blocked") {
+        setError("Popup blev blokeret — tillad popups for denne side i din browser og prøv igen.");
+      } else if (e.code === "auth/cancelled-popup-request") {
+        // bruger lukkede popup — ignorer
+      } else {
+        setError("Login fejlede (" + (e.code || e.message) + ")");
+      }
       setLoading(false);
     }
   };
@@ -77,16 +66,16 @@ export function LoginScreen() {
             <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
             <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
           </svg>
-          {loading ? "Sender til Google..." : "Fortsæt med Google"}
+          {loading ? "Logger ind..." : "Fortsæt med Google"}
         </button>
 
         {error && (
-          <div style={{ color: "#f87171", fontSize: 13, textAlign: "center" }}>{error}</div>
+          <div style={{ color: "#f87171", fontSize: 13, textAlign: "center", lineHeight: 1.5 }}>{error}</div>
         )}
 
         <p style={{ color: "#334155", fontSize: 12, textAlign: "center" }}>
-          Du bliver sendt til Google og tilbage igen.<br/>
-          Login bruges kun til at beskytte adgang.
+          Et Google-vindue åbner sig.<br/>
+          Tillad popups hvis browseren spørger.
         </p>
       </div>
     </div>
