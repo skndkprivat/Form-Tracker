@@ -335,7 +335,16 @@ function AppInner({ user }) {
     });
   }, [scheduleSync]);
 
-  // Vis loading mens Firestore henter data
+
+
+  // UI state — SKAL stå FØR enhver tidlig return (React hooks regel #310)
+  const [editingMountain, setEditingMountain] = useState(null);
+  const [showAddModal,    setShowAddModal]    = useState(false);
+  const [logModal,        setLogModal]        = useState(null);
+  const [showImport,      setShowImport]      = useState(false);
+  const [activeTab,       setActiveTab]       = useState("chart");
+
+  // Loading screen — EFTER alle hooks
   if (!appState) return (
     <div style={{minHeight:"100vh",background:"#0a0f1e",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",fontFamily:"Inter,system-ui,sans-serif",fontSize:16,flexDirection:"column",gap:12}}>
       <div style={{fontSize:32}}>☁️</div>
@@ -348,12 +357,6 @@ function AppInner({ user }) {
     startCTL, startATL, startDateStr, raceDateStr, baseWeeklyTSS,
     restDays, mountains, logged
   } = appState;
-
-  const [editingMountain, setEditingMountain] = useState(null);
-  const [showAddModal,    setShowAddModal]    = useState(false);
-  const [logModal,        setLogModal]        = useState(null);
-  const [showImport,      setShowImport]      = useState(false);
-  const [activeTab,       setActiveTab]       = useState("chart");
 
   const startDate    = useMemo(() => new Date(startDateStr + "T12:00:00"), [startDateStr]);
   const systemWeight = weight + bikeKg + bottles * 0.75 + extraKg;

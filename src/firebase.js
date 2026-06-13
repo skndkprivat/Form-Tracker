@@ -9,12 +9,13 @@ import {
   setPersistence
 } from "firebase/auth";
 import {
-  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   doc,
   getDoc,
   setDoc,
   onSnapshot,
-  enableIndexedDbPersistence
 } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -28,10 +29,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
 
-// Offline support — data cached lokalt hvis ingen internet
-enableIndexedDbPersistence(db).catch(() => {});
+// Moderne offline cache (erstatter enableIndexedDbPersistence)
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
 
 // Auth
 setPersistence(auth, browserLocalPersistence);
