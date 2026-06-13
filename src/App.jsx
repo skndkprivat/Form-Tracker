@@ -19,87 +19,62 @@ const MOUNTAIN_PRESETS = [
   { id: 4, name: "Cykelnerven dag 3", date: "2025-06-13", tss: 160, color: "#8b5cf6" },
 ];
 
-const DEFAULT_PLAN = [
-  { label: "Let Z2", tss: 40 },          { label: "Fri 🛌",               tss: 0  },
-  { label: "Spin-off Z2 let", tss: 55 }, { label: "Z2 + 2×15 sweet spot", tss: 80 },
-  { label: "Fri 🚫", tss: 0 },           { label: "Z2 lang 2,5t",         tss: 90 },
-  { label: "Tærskel 3×10", tss: 70 },    { label: "Z2 let",                tss: 50 },
-  { label: "Sim-tur bjerg-pace",tss:130 },{ label: "Z2 + spin",             tss: 55 },
-  { label: "5×5 min @ 175W", tss: 75 },  { label: "Fri 🚫",                tss: 0  },
-  { label: "Tærskel 2×12", tss: 55 },    { label: "Z2 let 1t",             tss: 45 },
-  { label: "Opener 3×2 min", tss: 50 },  { label: "Z2 let 45m",            tss: 35 },
-  { label: "Opener 3×1 min", tss: 25 },  { label: "Rejse 🚐",              tss: 0  },
-  { label: "Race dag 1 🏔️", tss: 0 },    { label: "Race dag 2 🏔️",        tss: 0  },
-  { label: "Race dag 3 🏔️", tss: 0 },    { label: "Race dag 4 🏔️",        tss: 0  },
-];
+// ─── Progressiv plan-generator ───────────────────────────────────────────────
+// 4-ugers blokke: uge1 (base), uge2 (+5%), uge3 (+10%), uge4 (rolig=uge2)
+// Taper: -2 uger = 50%, -1 uge = 30%
+const DAY_WEIGHTS = { 0:0, 1:0.18, 2:0.20, 3:0, 4:0.17, 5:0.18, 6:0.27 };
+const DAY_LABELS  = {
+  0: "Fri 🛌", 1: "Z2 let", 2: "Tærskel intervaller",
+  3: "Fri 🚫", 4: "Z2 moderat", 5: "Sweet spot", 6: "Lang Z2",
+};
 
-function parseCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return { rows: [], format: "ukendt" };
-  const header = lines[0].toLowerCase();
-  const cols = header.split(/[,;]/).map(c => c.trim().replace(/"/g, ""));
-  const idxDate = cols.findIndex(c => c === "date" || c === "start_date_local");
-  const idxTSS  = cols.findIndex(c => c === "training load" || c === "icu_training_load" || c === "tss" || c === "training stress score");
-  const idxName = cols.findIndex(c => c === "name" || c === "activity name" || c === "title");
-  if (idxDate !== -1 && idxTSS !== -1) {
-    const rows = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cells = splitCSVLine(lines[i]);
-      const date = normalizeDate(cells[idxDate]?.replace(/"/g, "").trim());
-      const tss  = parseFloat(cells[idxTSS]?.replace(/"/g, "").trim());
-      const name = idxName !== -1 ? cells[idxName]?.replace(/"/g, "").trim() : "";
-      if (date && !isNaN(tss)) rows.push({ date, tss: Math.round(tss), name: name || "Importeret" });
-    }
-    return { rows, format: "intervals.icu / Strava CSV" };
-  }
-  const idxGDate = cols.findIndex(c => c === "date");
-  const idxGTSS  = cols.findIndex(c => c.includes("training stress"));
-  const idxGName = cols.findIndex(c => c === "title" || c === "activity name" || c === "name");
-  if (idxGDate !== -1 && idxGTSS !== -1) {
-    const rows = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cells = splitCSVLine(lines[i]);
-      const date = normalizeDate(cells[idxGDate]?.replace(/"/g, "").trim());
-      const tss  = parseFloat(cells[idxGTSS]?.replace(/"/g, "").trim().replace(",", "."));
-      const name = idxGName !== -1 ? cells[idxGName]?.replace(/"/g, "").trim() : "";
-      if (date && !isNaN(tss) && tss > 0) rows.push({ date, tss: Math.round(tss), name: name || "Garmin aktivitet" });
-    }
-    return { rows, format: "Garmin Connect CSV" };
-  }
-  const idxFDate = cols.findIndex(c => c.includes("date") || c.includes("dato"));
-  const idxFTSS  = cols.findIndex(c => c.includes("tss") || c.includes("load") || c.includes("stress"));
-  if (idxFDate !== -1 && idxFTSS !== -1) {
-    const rows = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cells = splitCSVLine(lines[i]);
-      const date = normalizeDate(cells[idxFDate]?.replace(/"/g, "").trim());
-      const tss  = parseFloat(cells[idxFTSS]?.replace(/"/g, "").replace(",",".").trim());
-      if (date && !isNaN(tss) && tss > 0) rows.push({ date, tss: Math.round(tss), name: "Importeret" });
-    }
-    return { rows, format: "Generisk CSV" };
-  }
-  return { rows: [], format: "ukendt" };
-}
+function generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays) {
+  if (!startDateStr || !raceDateStr) return [];
+  const msDay = 86400000;
+  const start = new Date(startDateStr + "T12:00:00");
+  const race  = new Date(raceDateStr  + "T12:00:00");
+  const totalDays = Math.round((race - start) / msDay) + 1;
+  if (totalDays <= 0) return [];
+  const totalWeeks = Math.ceil(totalDays / 7);
 
-function splitCSVLine(line) {
-  const result = []; let cur = "", inQ = false;
-  for (const ch of line) {
-    if (ch === '"') { inQ = !inQ; }
-    else if ((ch === "," || ch === ";") && !inQ) { result.push(cur); cur = ""; }
-    else cur += ch;
+  // Byg ugernes TSS med 4-ugers blokke
+  const weeklyTSS = [];
+  for (let w = 0; w < totalWeeks; w++) {
+    const weeksToRace = totalWeeks - w;
+    let tss;
+    if (weeksToRace === 1) {
+      tss = Math.round(baseWeeklyTSS * 0.30);
+    } else if (weeksToRace === 2) {
+      tss = Math.round(baseWeeklyTSS * 0.50);
+    } else {
+      const posInBlock = w % 4;
+      const blockNum   = Math.floor(w / 4);
+      const blockBase  = Math.round(baseWeeklyTSS * Math.pow(1.15, blockNum)); // +15% pr blok
+      if (posInBlock === 0) tss = blockBase;
+      else if (posInBlock === 1) tss = Math.round(blockBase * 1.05);
+      else if (posInBlock === 2) tss = Math.round(blockBase * 1.10);
+      else tss = Math.round(blockBase * 1.05); // rolig = uge 2
+    }
+    weeklyTSS.push(tss);
   }
-  result.push(cur); return result;
-}
 
-function normalizeDate(raw) {
-  if (!raw) return null;
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const dmy = raw.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
-  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,"0")}-${dmy[1].padStart(2,"0")}`;
-  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (mdy) return `${mdy[3]}-${mdy[1].padStart(2,"0")}-${mdy[2].padStart(2,"0")}`;
-  return null;
+  // Byg dag-for-dag
+  const plan = [];
+  for (let i = 0; i < totalDays; i++) {
+    const d = new Date(start.getTime() + i * msDay);
+    const weekIdx = Math.min(Math.floor(i / 7), totalWeeks - 1);
+    const weekday = d.getDay();
+    const isRestDay = restDays.includes(weekday) || DAY_WEIGHTS[weekday] === 0;
+
+    let tss = 0, label = DAY_LABELS[weekday] || "Fri";
+    if (!isRestDay) {
+      const activeDays = Object.entries(DAY_WEIGHTS).filter(([d]) => !restDays.includes(+d) && DAY_WEIGHTS[+d] > 0);
+      const totalW = activeDays.reduce((s, [, w]) => s + w, 0);
+      tss = Math.max(20, Math.round((weeklyTSS[weekIdx] || 0) * DAY_WEIGHTS[weekday] / totalW));
+    }
+    plan.push({ label, tss });
+  }
+  return plan;
 }
 
 function computeSeries(startCTL, startATL, startDate, planDays, mountains, restDays, logged) {
@@ -133,6 +108,57 @@ function computeSeries(startCTL, startATL, startDate, planDays, mountains, restD
       isMountain: !!mtn, mountainName: mtn?.name || null, mountainColor: mtn?.color || null,
     };
   });
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return { rows: [], format: "ukendt" };
+  const header = lines[0].toLowerCase();
+  const cols = header.split(/[,;]/).map(c => c.trim().replace(/"/g, ""));
+  const idxDate = cols.findIndex(c => c === "date" || c === "start_date_local");
+  const idxTSS  = cols.findIndex(c => c === "training load" || c === "icu_training_load" || c === "tss" || c === "training stress score");
+  const idxName = cols.findIndex(c => c === "name" || c === "activity name" || c === "title");
+  if (idxDate !== -1 && idxTSS !== -1) {
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = splitCSVLine(lines[i]);
+      const date = normalizeDate(cells[idxDate]?.replace(/"/g,"").trim());
+      const tss  = parseFloat(cells[idxTSS]?.replace(/"/g,"").trim());
+      const name = idxName !== -1 ? cells[idxName]?.replace(/"/g,"").trim() : "";
+      if (date && !isNaN(tss)) rows.push({ date, tss: Math.round(tss), name: name || "Importeret" });
+    }
+    return { rows, format: "intervals.icu / Strava CSV" };
+  }
+  const idxFDate = cols.findIndex(c => c.includes("date") || c.includes("dato"));
+  const idxFTSS  = cols.findIndex(c => c.includes("tss") || c.includes("load") || c.includes("stress"));
+  if (idxFDate !== -1 && idxFTSS !== -1) {
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = splitCSVLine(lines[i]);
+      const date = normalizeDate(cells[idxFDate]?.replace(/"/g,"").trim());
+      const tss  = parseFloat(cells[idxFTSS]?.replace(/"/g,"").replace(",",".").trim());
+      if (date && !isNaN(tss) && tss > 0) rows.push({ date, tss: Math.round(tss), name: "Importeret" });
+    }
+    return { rows, format: "Generisk CSV" };
+  }
+  return { rows: [], format: "ukendt" };
+}
+function splitCSVLine(line) {
+  const result = []; let cur = "", inQ = false;
+  for (const ch of line) {
+    if (ch === '"') inQ = !inQ;
+    else if ((ch === "," || ch === ";") && !inQ) { result.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  result.push(cur); return result;
+}
+function normalizeDate(raw) {
+  if (!raw) return null;
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const dmy = raw.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,"0")}-${dmy[1].padStart(2,"0")}`;
+  return null;
 }
 
 function ImportModal({ onImport, onClose }) {
@@ -170,7 +196,7 @@ function ImportModal({ onImport, onClose }) {
               </div>
             ))}
           </div>
-          <div className="import-manual-note">💡 Eller lav en simpel CSV med kolonner: <code>date,tss</code></div>
+          <div className="import-manual-note">💡 Eller lav en simpel CSV: <code>date,tss</code></div>
           <label className="btn-file-upload">📂 Vælg CSV-fil<input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} style={{display:"none"}} /></label>
           <button className="btn-cancel" onClick={onClose}>Annuller</button>
         </>)}
@@ -252,7 +278,6 @@ function ChartTooltip({ active, payload }) {
   );
 }
 
-// ─── Auth wrapper — ingen hooks efter tidlige returns ────────────────────────
 export default function FormTracker() {
   const user = useAuth();
   if (user === undefined) return (
@@ -264,7 +289,6 @@ export default function FormTracker() {
   return <AppInner user={user} />;
 }
 
-// ─── Hoved-app — alle hooks her ──────────────────────────────────────────────
 function AppInner({ user }) {
   const [ftp,          setFtp]          = useState(() => LS("ft_ftp", 180));
   const [weight,       setWeight]       = useState(() => LS("ft_weight", 77));
@@ -274,7 +298,9 @@ function AppInner({ user }) {
   const [startCTL,     setStartCTL]     = useState(() => LS("ft_startCTL", 67.3));
   const [startATL,     setStartATL]     = useState(() => LS("ft_startATL", 67.4));
   const [startDateStr, setStartDateStr] = useState(() => LS("ft_startDate", "2025-05-22"));
-  const [restDays,     setRestDays]     = useState(() => LS("ft_restDays", [3]));
+  const [raceDateStr,  setRaceDateStr]  = useState(() => LS("ft_raceDate", "2025-06-13"));
+  const [baseWeeklyTSS,setBaseWeeklyTSS]= useState(() => LS("ft_baseWeeklyTSS", 350));
+  const [restDays,     setRestDays]     = useState(() => LS("ft_restDays", [0, 3]));
   const [mountains,    setMountains]    = useState(() => LS("ft_mountains", MOUNTAIN_PRESETS));
   const [logged,       setLogged]       = useState(() => LS("ft_logged", {}));
   const [editingMountain, setEditingMountain] = useState(null);
@@ -284,21 +310,33 @@ function AppInner({ user }) {
   const [activeTab,       setActiveTab]       = useState("chart");
   const [saveMsg,         setSaveMsg]         = useState("");
 
-  useEffect(() => { LSset("ft_ftp",       ftp);          }, [ftp]);
-  useEffect(() => { LSset("ft_weight",    weight);       }, [weight]);
-  useEffect(() => { LSset("ft_bikeKg",    bikeKg);       }, [bikeKg]);
-  useEffect(() => { LSset("ft_bottles",   bottles);      }, [bottles]);
-  useEffect(() => { LSset("ft_extraKg",   extraKg);      }, [extraKg]);
-  useEffect(() => { LSset("ft_startCTL",  startCTL);     }, [startCTL]);
-  useEffect(() => { LSset("ft_startATL",  startATL);     }, [startATL]);
-  useEffect(() => { LSset("ft_startDate", startDateStr); }, [startDateStr]);
-  useEffect(() => { LSset("ft_restDays",  restDays);     }, [restDays]);
-  useEffect(() => { LSset("ft_mountains", mountains);    }, [mountains]);
-  useEffect(() => { LSset("ft_logged",    logged);       }, [logged]);
+  useEffect(() => { LSset("ft_ftp",          ftp);          }, [ftp]);
+  useEffect(() => { LSset("ft_weight",        weight);       }, [weight]);
+  useEffect(() => { LSset("ft_bikeKg",        bikeKg);       }, [bikeKg]);
+  useEffect(() => { LSset("ft_bottles",       bottles);      }, [bottles]);
+  useEffect(() => { LSset("ft_extraKg",       extraKg);      }, [extraKg]);
+  useEffect(() => { LSset("ft_startCTL",      startCTL);     }, [startCTL]);
+  useEffect(() => { LSset("ft_startATL",      startATL);     }, [startATL]);
+  useEffect(() => { LSset("ft_startDate",     startDateStr); }, [startDateStr]);
+  useEffect(() => { LSset("ft_raceDate",      raceDateStr);  }, [raceDateStr]);
+  useEffect(() => { LSset("ft_baseWeeklyTSS", baseWeeklyTSS);}, [baseWeeklyTSS]);
+  useEffect(() => { LSset("ft_restDays",      restDays);     }, [restDays]);
+  useEffect(() => { LSset("ft_mountains",     mountains);    }, [mountains]);
+  useEffect(() => { LSset("ft_logged",        logged);       }, [logged]);
 
   const startDate    = useMemo(() => new Date(startDateStr + "T12:00:00"), [startDateStr]);
   const systemWeight = weight + bikeKg + bottles * 0.75 + extraKg;
-  const series       = useMemo(() => computeSeries(startCTL, startATL, startDate, DEFAULT_PLAN, mountains, restDays, logged), [startCTL, startATL, startDate, mountains, restDays, logged]);
+
+  // Generer plan dynamisk baseret på race-dato og baseWeeklyTSS
+  const planDays = useMemo(() =>
+    generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays),
+    [startDateStr, raceDateStr, baseWeeklyTSS, restDays]
+  );
+
+  const series = useMemo(() =>
+    computeSeries(startCTL, startATL, startDate, planDays, mountains, restDays, logged),
+    [startCTL, startATL, startDate, planDays, mountains, restDays, logged]
+  );
 
   useEffect(() => {
     const today = todayIso();
@@ -345,8 +383,20 @@ function AppInner({ user }) {
         <div className="stats-row">
           <Stat label="W/kg krop"   value={(ftp/weight).toFixed(2)}       sub={`${ftp}W / ${weight}kg`} />
           <Stat label="W/kg system" value={(ftp/systemWeight).toFixed(2)} sub="inkl. cykel + dunke" />
-          <Stat label="TSB i dag"   value={(todayRow?.tsb >= 0 ? "+" : "") + todayRow?.tsb} color={todayRow?.tsb > 5 ? "#4ade80" : todayRow?.tsb < -5 ? "#f87171" : "#facc15"} sub="form" />
-          <Stat label="TSB race"    value={(raceRow?.tsb >= 0 ? "+" : "") + raceRow?.tsb} color="#4ade80" sub={raceRow?.label} />
+          <Stat
+            label="CTL · Fitness"
+            value={todayRow?.ctl}
+            sub2="ATL · Træthed"
+            value2={todayRow?.atl}
+            color="#60a5fa"
+            color2="#f87171"
+          />
+          <Stat
+            label="TSB · Form"
+            value={(todayRow?.tsb >= 0 ? "+" : "") + todayRow?.tsb}
+            color={todayRow?.tsb > 5 ? "#4ade80" : todayRow?.tsb < -5 ? "#f87171" : "#facc15"}
+            sub={`Race: ${(raceRow?.tsb >= 0 ? "+" : "") + raceRow?.tsb}`}
+          />
         </div>
         {saveMsg && <div className="save-toast">{saveMsg}</div>}
       </header>
@@ -355,20 +405,25 @@ function AppInner({ user }) {
         <section className="card">
           <h2>Min profil <span className="auto-save-note">· gemmes automatisk</span></h2>
           <div className="grid-4">
-            <Field label="FTP (W)"        value={ftp}          onChange={setFtp}          type="number" />
-            <Field label="Vægt (kg)"      value={weight}       onChange={setWeight}       type="number" />
-            <Field label="Cykel (kg)"     value={bikeKg}       onChange={setBikeKg}       type="number" />
-            <Field label="Dunke (×750ml)" value={bottles}      onChange={setBottles}      type="number" />
-            <Field label="Udstyr (kg)"    value={extraKg}      onChange={setExtraKg}      type="number" />
-            <Field label="Start CTL"      value={startCTL}     onChange={setStartCTL}     type="number" />
-            <Field label="Start ATL"      value={startATL}     onChange={setStartATL}     type="number" />
-            <Field label="Start dato"     value={startDateStr} onChange={setStartDateStr} type="date"   />
+            <Field label="FTP (W)"          value={ftp}           onChange={setFtp}           type="number" />
+            <Field label="Vægt (kg)"        value={weight}        onChange={setWeight}        type="number" />
+            <Field label="Cykel (kg)"       value={bikeKg}        onChange={setBikeKg}        type="number" />
+            <Field label="Dunke (×750ml)"   value={bottles}       onChange={setBottles}       type="number" />
+            <Field label="Udstyr (kg)"      value={extraKg}       onChange={setExtraKg}       type="number" />
+            <Field label="Start CTL"        value={startCTL}      onChange={setStartCTL}      type="number" />
+            <Field label="Start ATL"        value={startATL}      onChange={setStartATL}      type="number" />
+            <Field label="Start dato"       value={startDateStr}  onChange={setStartDateStr}  type="date"   />
+            <Field label="Race dato 🏔️"     value={raceDateStr}   onChange={setRaceDateStr}   type="date"   />
+            <Field label="Base uge-TSS"     value={baseWeeklyTSS} onChange={setBaseWeeklyTSS} type="number" />
           </div>
           <div className="rest-days">
             <label className="rest-label">Faste fridage</label>
             <div className="day-btns">
               {WEEKDAYS.map((name, i) => <button key={i} className={"day-btn"+(restDays.includes(i)?" active":"")} onClick={() => toggleRestDay(i)}>{name}</button>)}
             </div>
+          </div>
+          <div className="plan-info">
+            📅 Planen genereres automatisk fra <strong>{startDateStr}</strong> til <strong>{raceDateStr}</strong> med {planDays.length} dage · {Math.ceil(planDays.length/7)} uger
           </div>
         </section>
 
@@ -402,18 +457,18 @@ function AppInner({ user }) {
           </div>
 
           {activeTab === "chart" && (<>
-            <div className="chart-legend-desc">Blå = CTL · Rød = ATL · Grøn = TSB · ✓ = logget</div>
+            <div className="chart-legend-desc">Blå = CTL (Fitness) · Rød = ATL (Træthed) · Grøn = TSB (Form) · ✓ = logget</div>
             <div style={{height:320}}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={series} margin={{top:8,right:16,bottom:0,left:-8}}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="label" tick={{fill:"#64748b",fontSize:10}} interval={2} />
+                  <XAxis dataKey="label" tick={{fill:"#64748b",fontSize:10}} interval={Math.max(1, Math.floor(series.length/15))} />
                   <YAxis tick={{fill:"#64748b",fontSize:11}} />
                   <Tooltip content={<ChartTooltip />} />
                   {sortedMountains.map(m => { const row = series.find(s => s.date === m.date); return row ? <ReferenceLine key={m.id} x={row.label} stroke={m.color} strokeDasharray="4 2" label={{value:"🏔️ "+m.name,fill:m.color,fontSize:10,position:"top"}} /> : null; })}
-                  <Line type="monotone" dataKey="ctl" stroke="#60a5fa" strokeWidth={2} dot={false} name="CTL" />
-                  <Line type="monotone" dataKey="atl" stroke="#f87171" strokeWidth={2} dot={false} name="ATL" />
-                  <Line type="monotone" dataKey="tsb" stroke="#4ade80" strokeWidth={2} dot={false} name="TSB" />
+                  <Line type="monotone" dataKey="ctl" stroke="#60a5fa" strokeWidth={2} dot={false} name="CTL · Fitness" />
+                  <Line type="monotone" dataKey="atl" stroke="#f87171" strokeWidth={2} dot={false} name="ATL · Træthed" />
+                  <Line type="monotone" dataKey="tsb" stroke="#4ade80" strokeWidth={2} dot={false} name="TSB · Form" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -422,7 +477,7 @@ function AppInner({ user }) {
           {activeTab === "plan" && (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Dato</th><th>Session</th><th>Plan TSS</th><th>Logget TSS</th><th>CTL</th><th>ATL</th><th>TSB</th><th></th></tr></thead>
+                <thead><tr><th>Dato</th><th>Session</th><th>Plan TSS</th><th>Logget TSS</th><th>CTL · Fitness</th><th>ATL · Træthed</th><th>TSB · Form</th><th></th></tr></thead>
                 <tbody>
                   {series.map((row, i) => (
                     <tr key={i} className={row.isMountain?"row-mountain":row.tss===0?"row-rest":row.logged?"row-logged":""}>
@@ -480,8 +535,20 @@ function AppInner({ user }) {
   );
 }
 
-function Stat({ label, value, sub, color }) {
-  return <div className="stat"><div className="stat-value" style={color?{color}:{}}>{value}</div><div className="stat-label">{label}</div><div className="stat-sub">{sub}</div></div>;
+function Stat({ label, value, sub, sub2, value2, color, color2 }) {
+  return (
+    <div className="stat">
+      <div className="stat-value" style={color?{color}:{}}>{value}</div>
+      <div className="stat-label">{label}</div>
+      {value2 !== undefined && (
+        <>
+          <div className="stat-value stat-value2" style={color2?{color:color2}:{}}>{value2}</div>
+          <div className="stat-label">{sub2}</div>
+        </>
+      )}
+      {sub && <div className="stat-sub">{sub}</div>}
+    </div>
+  );
 }
 
 function Field({ label, value, onChange, type = "text" }) {
@@ -513,8 +580,9 @@ const CSS = `
   @media(max-width:600px) { .stats-row { grid-template-columns: repeat(2,1fr); } .header-top { flex-direction: column; gap: 12px; } }
   .stat { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 12px 14px; }
   .stat-value { font-size: 22px; font-weight: 700; color: #a5b4fc; }
+  .stat-value2 { font-size: 16px; font-weight: 700; margin-top: 6px; }
   .stat-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
-  .stat-sub { font-size: 11px; color: #475569; margin-top: 2px; }
+  .stat-sub { font-size: 11px; color: #475569; margin-top: 4px; }
   .save-toast { position: absolute; top: 16px; right: 20px; background: #166534; color: #bbf7d0; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 8px; }
   .auto-save-note { font-size: 11px; color: #475569; font-weight: 400; text-transform: none; }
   main { max-width: 900px; margin: 0 auto; padding: 20px 16px 48px; display: flex; flex-direction: column; gap: 20px; }
@@ -532,6 +600,8 @@ const CSS = `
   .day-btn { background: #1e293b; border: 1px solid #334155; color: #94a3b8; border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
   .day-btn.active { background: #312e81; border-color: #6366f1; color: #a5b4fc; }
   .day-btn:hover { border-color: #6366f1; }
+  .plan-info { margin-top: 14px; background: #1e293b; border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #64748b; }
+  .plan-info strong { color: #94a3b8; }
   .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .section-header h2 { margin-bottom: 0; }
   .btn-add { background: #1e40af; color: #bfdbfe; border: none; border-radius: 7px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
