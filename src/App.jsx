@@ -20,7 +20,7 @@ const MOUNTAIN_PRESETS = [
 
 const DEFAULT_STATE = {
   ftp: 180, weight: 77, bikeKg: 8.5, bottles: 2, extraKg: 0.7,
-  startCTL: 67.3, startATL: 67.4,
+  startCTL: 67.3, startATL: 67.4, startTSB: -0.1,
   startDateStr: "2025-05-22", raceDateStr: "2025-06-13",
   baseWeeklyTSS: 350, restDays: [0, 3],
   mountains: MOUNTAIN_PRESETS, logged: {},
@@ -157,6 +157,62 @@ function normalizeDate(raw) {
   return null;
 }
 
+// ─── Hjælp Modal ──────────────────────────────────────────────────────────────
+function HelpModal({ onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal help-modal" onClick={e => e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <h3>📖 Bruger Manual</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#64748b",fontSize:20,cursor:"pointer",padding:"0 4px"}}>✕</button>
+        </div>
+        <div className="help-content">
+          <h4>📊 Forstå tallene</h4>
+          <p><strong style={{color:"#60a5fa"}}>CTL · Fitness</strong> — Dit langsigtede træningsniveau (42-dages gennemsnit). Stiger langsomt med regelmæssig træning.</p>
+          <p><strong style={{color:"#f87171"}}>ATL · Træthed</strong> — Din kortsigtede træthed (7-dages gennemsnit). Stiger hurtigt efter hård træning, falder hurtigt ved hvile.</p>
+          <p><strong style={{color:"#4ade80"}}>TSB · Form</strong> = CTL minus ATL. Positivt tal = du er frisk og klar. Negativt = du er træt.</p>
+          <p><strong>TSS</strong> — Training Stress Score. Let 1-times tur ≈ 40. Hård bjergdag ≈ 150-200.</p>
+
+          <h4>🎯 Optimal TSB på race day</h4>
+          <div className="help-table">
+            <div className="help-row"><span>Under −20</span><span style={{color:"#f87171"}}>Meget træt</span></div>
+            <div className="help-row"><span>−20 til −5</span><span style={{color:"#f87171"}}>Træt — reducer belastning</span></div>
+            <div className="help-row"><span>−5 til +5</span><span style={{color:"#facc15"}}>Neutral</span></div>
+            <div className="help-row help-best-row"><span className="help-best">+5 til +15 ✓</span><span style={{color:"#4ade80"}}>Optimal form</span></div>
+            <div className="help-row"><span>Over +25</span><span style={{color:"#64748b"}}>For frisk — fitness er faldet</span></div>
+          </div>
+
+          <h4>👤 Min profil — startværdier</h4>
+          <p><strong>Start CTL · Fitness</strong> — Find i <em>Intervals.icu → Fitness</em> og aflæs "Fitness" på dagens dato.</p>
+          <p><strong>Start TSB · Form</strong> — Aflæs "Form" i Intervals.icu. ATL beregnes automatisk som CTL minus TSB.</p>
+          <p><strong>Race dato</strong> — Din vigtigste begivenhed. Planen genereres automatisk frem til den dato.</p>
+          <p><strong>Base uge-TSS</strong> — Din nuværende ugentlige træningsbelastning. Typisk 250-500 for aktive cykelryttere.</p>
+
+          <h4>🏔️ Automatisk plan-generator</h4>
+          <p>Planen bruger <strong>4-ugers blokke</strong>:</p>
+          <div className="help-table">
+            <div className="help-row"><span>Uge 1</span><span>Basis</span></div>
+            <div className="help-row"><span>Uge 2</span><span>+5%</span></div>
+            <div className="help-row"><span>Uge 3</span><span>+10%</span></div>
+            <div className="help-row"><span>Uge 4</span><span style={{color:"#4ade80"}}>Rolig (= uge 2)</span></div>
+            <div className="help-row"><span>-2 uger</span><span style={{color:"#a5b4fc"}}>Taper 50%</span></div>
+            <div className="help-row"><span>-1 uge</span><span style={{color:"#a5b4fc"}}>Taper 30%</span></div>
+          </div>
+
+          <h4>✍️ Log dine træninger</h4>
+          <p>Klik <strong>+</strong> på en dag i planen for at logge faktisk TSS. Loggede værdier påvirker CTL/ATL/TSB-beregningen fremadrettet.</p>
+
+          <h4>📥 Importer fra Garmin / Intervals.icu / Strava</h4>
+          <p>Klik <strong>📥 Importer</strong> øverst og upload en CSV-fil fra din træningsplatform.</p>
+
+          <h4>☁️ Cloud sync</h4>
+          <p>Alle data gemmes automatisk i Firebase og synkroniseres på tværs af PC, iPhone og tablet ved næste login.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ImportModal({ onImport, onClose }) {
   const [step, setStep] = useState("choose");
   const [format, setFormat] = useState("");
@@ -286,7 +342,7 @@ export default function FormTracker() {
   return <AppInner user={user} />;
 }
 
-// ─── Firestore loader (ingen useMemo/useEffect der kan kollidere) ─────────────
+// ─── Firestore loader ─────────────────────────────────────────────────────────
 function AppInner({ user }) {
   const [appState, setAppState] = useState(null);
   const [syncing,  setSyncing]  = useState(false);
@@ -335,15 +391,16 @@ function AppInner({ user }) {
   return <AppUI user={user} appState={appState} update={update} syncing={syncing} saveMsg={saveMsg} setSaveMsg={setSaveMsg} />;
 }
 
-// ─── Hoved UI — alle hooks her, ingen betingede returns FØR hooks ─────────────
+// ─── Hoved UI ─────────────────────────────────────────────────────────────────
 function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
   const [editingMountain, setEditingMountain] = useState(null);
   const [showAddModal,    setShowAddModal]    = useState(false);
   const [logModal,        setLogModal]        = useState(null);
   const [showImport,      setShowImport]      = useState(false);
+  const [showHelp,        setShowHelp]        = useState(false);
   const [activeTab,       setActiveTab]       = useState("chart");
 
-  const { ftp, weight, bikeKg, bottles, extraKg, startCTL, startATL,
+  const { ftp, weight, bikeKg, bottles, extraKg, startCTL, startATL, startTSB,
           startDateStr, raceDateStr, baseWeeklyTSS, restDays, mountains, logged } = appState;
 
   const startDate    = useMemo(() => new Date(startDateStr + "T12:00:00"), [startDateStr]);
@@ -376,6 +433,9 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
   const deleteMountain = id => update("mountains", mountains.filter(m => m.id !== id));
   const newMountainTemplate = { id: null, name: "Nyt bjerg", date: isoDate(new Date()), tss: 120, color: "#06b6d4" };
 
+  // Beregn TSB som CTL - ATL for display
+  const currentTSB = +(startCTL - startATL).toFixed(1);
+
   return (
     <div className="app">
       <style>{CSS}</style>
@@ -388,6 +448,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
           </div>
           <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
             <UserBadge user={user} syncing={syncing} />
+            <button className="btn-help-header" onClick={() => setShowHelp(true)}>❓ Hjælp</button>
             <button className="btn-import-header" onClick={() => setShowImport(true)}>📥 Importer</button>
           </div>
         </div>
@@ -411,8 +472,9 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
             <Field label="Cykel (kg)"     value={bikeKg}        onChange={v => update("bikeKg", v)}        type="number" />
             <Field label="Dunke (×750ml)" value={bottles}       onChange={v => update("bottles", v)}       type="number" />
             <Field label="Udstyr (kg)"    value={extraKg}       onChange={v => update("extraKg", v)}       type="number" />
-            <Field label="Start CTL"      value={startCTL}      onChange={v => update("startCTL", v)}      type="number" />
-            <Field label="Start ATL"      value={startATL}      onChange={v => update("startATL", v)}      type="number" />
+            <Field label="Start CTL · Fitness" value={startCTL} onChange={v => { update("startCTL", v); update("startATL", +(v - (startTSB ?? currentTSB)).toFixed(1)); }} type="number" />
+            <Field label="Start TSB · Form" value={startTSB ?? currentTSB} onChange={v => { update("startTSB", v); update("startATL", +(startCTL - v).toFixed(1)); }} type="number" />
+            <Field label="Start ATL · Træthed" value={startATL} onChange={v => { update("startATL", v); update("startTSB", +(startCTL - v).toFixed(1)); }} type="number" />
             <Field label="Start dato"     value={startDateStr}  onChange={v => update("startDateStr", v)}  type="date"   />
             <Field label="Race dato 🏔️"   value={raceDateStr}   onChange={v => update("raceDateStr", v)}   type="date"   />
             <Field label="Base uge-TSS"   value={baseWeeklyTSS} onChange={v => update("baseWeeklyTSS", v)} type="number" />
@@ -505,7 +567,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
               {Object.keys(logged).length === 0
                 ? <div className="empty-log">Ingen loggede træninger. Klik "Importer CSV" eller brug + i plan-tabellen.</div>
                 : <div className="log-list">
-                    {Object.entries(logged).sort((a,b) => b[0].localeCompare(a[0])).map(([date, entry]) => {
+                    {Object.entries(logged).sort((a,b) => b[0].localecompare(a[0])).map(([date, entry]) => {
                       const row = series.find(s => s.date === date);
                       return (
                         <div key={date} className="log-entry">
@@ -528,6 +590,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
         </section>
       </main>
 
+      {showHelp         && <HelpModal onClose={() => setShowHelp(false)} />}
       {logModal         && <LogModal row={logModal} onSave={e => saveLog(logModal.date, e)} onSkip={() => saveLog(logModal.date, {tss:logModal.planTss||0,note:""})} />}
       {editingMountain  && <MountainModal mountain={editingMountain} onSave={saveMountain} onClose={() => setEditingMountain(null)} />}
       {showAddModal     && <MountainModal mountain={newMountainTemplate} onSave={addMountain} onClose={() => setShowAddModal(false)} />}
@@ -575,6 +638,8 @@ const CSS = `
   .subtitle { color: #64748b; font-size: 13px; }
   .btn-import-header { background: #164e63; color: #67e8f9; border: 1px solid #0e7490; border-radius: 9px; padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .btn-import-header:hover { background: #0e7490; }
+  .btn-help-header { background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 9px; padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .btn-help-header:hover { background: #334155; color: #e2e8f0; }
   .stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
   @media(max-width:600px) { .stats-row { grid-template-columns: repeat(2,1fr); } .header-top { flex-direction: column; gap: 12px; } }
   .stat { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 12px 14px; }
@@ -701,4 +766,16 @@ const CSS = `
   .import-done-icon { font-size: 40px; }
   .import-done-title { font-size: 18px; font-weight: 700; color: #4ade80; }
   .import-done-sub { font-size: 13px; color: #64748b; text-align: center; }
+  .help-modal { width: 520px; max-width: 100%; }
+  .help-content { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 62vh; padding-right: 4px; }
+  .help-content h4 { font-size: 12px; font-weight: 700; color: #a5b4fc; text-transform: uppercase; letter-spacing: .07em; margin-top: 8px; border-top: 1px solid #1e293b; padding-top: 10px; }
+  .help-content h4:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+  .help-content p { font-size: 13px; color: #94a3b8; line-height: 1.6; }
+  .help-content strong { color: #e2e8f0; }
+  .help-content em { color: #60a5fa; font-style: normal; }
+  .help-table { display: flex; flex-direction: column; gap: 3px; background: #1e293b; border-radius: 8px; padding: 10px 12px; }
+  .help-row { display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8; padding: 3px 0; border-bottom: 1px solid #0f172a; }
+  .help-row:last-child { border-bottom: none; }
+  .help-best-row { background: #052e16; margin: 0 -12px; padding: 4px 12px; border-radius: 4px; }
+  .help-best { color: #4ade80; font-weight: 700; }
 `;
