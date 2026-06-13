@@ -26,7 +26,6 @@ const DEFAULT_STATE = {
   mountains: MOUNTAIN_PRESETS, logged: {},
 };
 
-// ─── Plan generator ───────────────────────────────────────────────────────────
 const DAY_WEIGHTS = { 0:0, 1:0.18, 2:0.20, 3:0, 4:0.17, 5:0.18, 6:0.27 };
 const DAY_LABELS  = {
   0:"Fri 🛌", 1:"Z2 let", 2:"Tærskel intervaller",
@@ -158,7 +157,6 @@ function normalizeDate(raw) {
   return null;
 }
 
-// ─── Modaler ──────────────────────────────────────────────────────────────────
 function ImportModal({ onImport, onClose }) {
   const [step, setStep] = useState("choose");
   const [format, setFormat] = useState("");
@@ -288,25 +286,18 @@ export default function FormTracker() {
   return <AppInner user={user} />;
 }
 
-// ─── Hoved-app med Firestore sync ─────────────────────────────────────────────
+// ─── Firestore loader (ingen useMemo/useEffect der kan kollidere) ─────────────
 function AppInner({ user }) {
-  const [appState, setAppState] = useState(null); // null = indlæser fra Firestore
+  const [appState, setAppState] = useState(null);
   const [syncing,  setSyncing]  = useState(false);
   const [saveMsg,  setSaveMsg]  = useState("");
   const saveTimer = useRef(null);
   const isRemoteUpdate = useRef(false);
 
-  // Indlæs data fra Firestore ved login
   useEffect(() => {
     loadFromFirestore(user.uid).then(data => {
-      if (data) {
-        setAppState({ ...DEFAULT_STATE, ...data });
-      } else {
-        setAppState(DEFAULT_STATE);
-      }
+      setAppState(data ? { ...DEFAULT_STATE, ...data } : DEFAULT_STATE);
     });
-
-    // Lyt på realtid-opdateringer fra andre enheder
     const unsub = subscribeToFirestore(user.uid, (data) => {
       isRemoteUpdate.current = true;
       setAppState(prev => prev ? { ...prev, ...data } : { ...DEFAULT_STATE, ...data });
@@ -314,7 +305,6 @@ function AppInner({ user }) {
     return unsub;
   }, [user.uid]);
 
-  // Gem til Firestore med debounce (1 sekund efter sidste ændring)
   const scheduleSync = useCallback((newState) => {
     if (isRemoteUpdate.current) { isRemoteUpdate.current = false; return; }
     setSyncing(true);
@@ -335,16 +325,6 @@ function AppInner({ user }) {
     });
   }, [scheduleSync]);
 
-
-
-  // UI state — SKAL stå FØR enhver tidlig return (React hooks regel #310)
-  const [editingMountain, setEditingMountain] = useState(null);
-  const [showAddModal,    setShowAddModal]    = useState(false);
-  const [logModal,        setLogModal]        = useState(null);
-  const [showImport,      setShowImport]      = useState(false);
-  const [activeTab,       setActiveTab]       = useState("chart");
-
-  // Loading screen — EFTER alle hooks
   if (!appState) return (
     <div style={{minHeight:"100vh",background:"#0a0f1e",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",fontFamily:"Inter,system-ui,sans-serif",fontSize:16,flexDirection:"column",gap:12}}>
       <div style={{fontSize:32}}>☁️</div>
@@ -352,24 +332,24 @@ function AppInner({ user }) {
     </div>
   );
 
-  const {
-    ftp, weight, bikeKg, bottles, extraKg,
-    startCTL, startATL, startDateStr, raceDateStr, baseWeeklyTSS,
-    restDays, mountains, logged
-  } = appState;
+  return <AppUI user={user} appState={appState} update={update} syncing={syncing} saveMsg={saveMsg} setSaveMsg={setSaveMsg} />;
+}
+
+// ─── Hoved UI — alle hooks her, ingen betingede returns FØR hooks ─────────────
+function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
+  const [editingMountain, setEditingMountain] = useState(null);
+  const [showAddModal,    setShowAddModal]    = useState(false);
+  const [logModal,        setLogModal]        = useState(null);
+  const [showImport,      setShowImport]      = useState(false);
+  const [activeTab,       setActiveTab]       = useState("chart");
+
+  const { ftp, weight, bikeKg, bottles, extraKg, startCTL, startATL,
+          startDateStr, raceDateStr, baseWeeklyTSS, restDays, mountains, logged } = appState;
 
   const startDate    = useMemo(() => new Date(startDateStr + "T12:00:00"), [startDateStr]);
   const systemWeight = weight + bikeKg + bottles * 0.75 + extraKg;
-
-  const planDays = useMemo(() =>
-    generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays),
-    [startDateStr, raceDateStr, baseWeeklyTSS, restDays]
-  );
-
-  const series = useMemo(() =>
-    computeSeries(startCTL, startATL, startDate, planDays, mountains, restDays, logged),
-    [startCTL, startATL, startDate, planDays, mountains, restDays, logged]
-  );
+  const planDays     = useMemo(() => generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays), [startDateStr, raceDateStr, baseWeeklyTSS, restDays]);
+  const series       = useMemo(() => computeSeries(startCTL, startATL, startDate, planDays, mountains, restDays, logged), [startCTL, startATL, startDate, planDays, mountains, restDays, logged]);
 
   useEffect(() => {
     const today = todayIso();
@@ -382,33 +362,17 @@ function AppInner({ user }) {
   const lastMountain    = sortedMountains[sortedMountains.length - 1];
   const raceRow         = series.find(s => s.date === lastMountain?.date) || series[series.length - 1];
   const todayRow        = series.find(s => s.date === todayIso()) || series[0];
-
-  const toggleRestDay = d => update("restDays", restDays.includes(d) ? restDays.filter(x => x !== d) : [...restDays, d]);
-
-  const saveLog = (date, entry) => {
-    const newLogged = { ...logged, [date]: entry };
-    update("logged", newLogged);
-    setLogModal(null);
-    setSaveMsg("Gemt ✓"); setTimeout(() => setSaveMsg(""), 2000);
-  };
-  const deleteLog = date => {
-    const newLogged = { ...logged }; delete newLogged[date];
-    update("logged", newLogged);
-  };
+  const toggleRestDay   = d => update("restDays", restDays.includes(d) ? restDays.filter(x => x !== d) : [...restDays, d]);
+  const saveLog = (date, entry) => { update("logged", { ...logged, [date]: entry }); setLogModal(null); setSaveMsg("Gemt ✓"); setTimeout(() => setSaveMsg(""), 2000); };
+  const deleteLog = date => { const n = { ...logged }; delete n[date]; update("logged", n); };
   const handleImport = (rows, mode) => {
     const next = { ...logged };
     rows.forEach(r => { if (mode === "keep" && next[r.date]) return; next[r.date] = { tss: r.tss, note: r.name !== "Importeret" ? r.name : "" }; });
     update("logged", next);
     setSaveMsg(`${rows.length} træninger importeret ✓`); setTimeout(() => setSaveMsg(""), 3000);
   };
-  const saveMountain = m => {
-    update("mountains", mountains.map(p => p.id === m.id ? { ...m, tss: +m.tss } : p));
-    setEditingMountain(null);
-  };
-  const addMountain = m => {
-    update("mountains", [...mountains, { ...m, id: Date.now(), tss: +m.tss }]);
-    setShowAddModal(false);
-  };
+  const saveMountain   = m => { update("mountains", mountains.map(p => p.id === m.id ? { ...m, tss: +m.tss } : p)); setEditingMountain(null); };
+  const addMountain    = m => { update("mountains", [...mountains, { ...m, id: Date.now(), tss: +m.tss }]); setShowAddModal(false); };
   const deleteMountain = id => update("mountains", mountains.filter(m => m.id !== id));
   const newMountainTemplate = { id: null, name: "Nyt bjerg", date: isoDate(new Date()), tss: 120, color: "#06b6d4" };
 
@@ -430,10 +394,8 @@ function AppInner({ user }) {
         <div className="stats-row">
           <Stat label="W/kg krop"   value={(ftp/weight).toFixed(2)}       sub={`${ftp}W / ${weight}kg`} />
           <Stat label="W/kg system" value={(ftp/systemWeight).toFixed(2)} sub="inkl. cykel + dunke" />
-          <Stat label="CTL · Fitness" value={todayRow?.ctl} color="#60a5fa"
-            sub2="ATL · Træthed" value2={todayRow?.atl} color2="#f87171" />
-          <Stat label="TSB · Form"
-            value={(todayRow?.tsb >= 0 ? "+" : "") + todayRow?.tsb}
+          <Stat label="CTL · Fitness" value={todayRow?.ctl} color="#60a5fa" sub2="ATL · Træthed" value2={todayRow?.atl} color2="#f87171" />
+          <Stat label="TSB · Form" value={(todayRow?.tsb >= 0 ? "+" : "") + todayRow?.tsb}
             color={todayRow?.tsb > 5 ? "#4ade80" : todayRow?.tsb < -5 ? "#f87171" : "#facc15"}
             sub={`Race TSB: ${(raceRow?.tsb >= 0 ? "+" : "") + raceRow?.tsb}`} />
         </div>
