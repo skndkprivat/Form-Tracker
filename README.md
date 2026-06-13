@@ -2,7 +2,7 @@
 
 **Live app:** https://skndkprivat.github.io/Form-Tracker/
 
-Form-tracker er et personligt træningsværktøj til cykelryttere der vil planlægge deres form mod en specifik begivenhed — fx et bjergløb, en flerdag-tur eller et stævne.
+Form-tracker er et personligt træningsværktøj til cykelryttere der vil planlægge deres form mod en specifik begivenhed — fx et bjergløb, en flerdag-tur eller et stævne. Data synkroniseres automatisk på tværs af alle dine enheder via Firebase.
 
 ---
 
@@ -10,14 +10,16 @@ Form-tracker er et personligt træningsværktøj til cykelryttere der vil planl�
 
 1. [Log ind](#-log-ind)
 2. [Forstå tallene](#-forstå-tallene)
-3. [Min profil](#-min-profil)
+3. [Min profil og plan-generator](#-min-profil-og-plan-generator)
 4. [Mine bjerge](#️-mine-bjerge)
 5. [Formkurven](#-formkurven)
 6. [Dag-for-dag plan](#-dag-for-dag-plan)
 7. [Log dine træninger](#-log-dine-træninger)
 8. [Importer fra Garmin / Intervals.icu / Strava](#-importer-fra-garmin--intervalsicu--strava)
-9. [Gem til hjemmeskærm (iPhone)](#-gem-til-hjemmeskærm-iphone)
-10. [Opdater koden](#-opdater-koden)
+9. [Cloud sync — data på alle enheder](#-cloud-sync--data-på-alle-enheder)
+10. [Gem til hjemmeskærm (iPhone)](#-gem-til-hjemmeskærm-iphone)
+11. [Lokal udvikling](#-lokal-udvikling)
+12. [Opdater og deploy](#-opdater-og-deploy)
 
 ---
 
@@ -27,11 +29,11 @@ Når du åbner appen første gang vises en login-skærm.
 
 1. Klik **Fortsæt med Google**
 2. Et vindue åbner sig — vælg din Google-konto
-3. Du er nu logget ind og kan se din træningsplan
+3. Du er nu logget ind og dine data hentes automatisk fra skyen
 
-> **Tip:** Din browser skal tillade popups fra `skndkprivat.github.io`. Hvis login ikke virker, klik på adresselinjen → hængelåsikonet → Popups → Tillad.
+> **Tip:** Din browser skal tillade popups fra `skndkprivat.github.io`. Klik på hængelåsikonet i adresselinjen → Popups → Tillad.
 
-Login huskes i browseren — du behøver ikke logge ind igen næste gang du åbner appen.
+Login huskes i browseren — du behøver ikke logge ind igen næste gang.
 
 ---
 
@@ -39,12 +41,12 @@ Login huskes i browseren — du behøver ikke logge ind igen næste gang du åbn
 
 Form-tracker bruger tre nøgletal fra sportsfysiologi:
 
-| Tal | Navn | Beskrivelse |
-|-----|------|-------------|
-| **CTL** | Chronic Training Load / Fitness | Dit langsigtede træningsniveau. Stiger langsomt over uger og måneder med regelmæssig træning. Beregnes over 42 dage. |
-| **ATL** | Acute Training Load / Træthed | Din kortsigtede træthed. Stiger hurtigt efter hård træning og falder hurtigt ved hvile. Beregnes over 7 dage. |
-| **TSB** | Training Stress Balance / Form | Din aktuelle form = CTL minus ATL. Positivt tal = du er frisk og klar. Negativt tal = du er træt. |
-| **TSS** | Training Stress Score | Et enkelt tal der beskriver hvor hård en træning var. En let 1-times tur = ca. 40. En hård bjergdag = 150-200. |
+| Tal | Fuldt navn | Beskrivelse |
+|-----|------------|-------------|
+| **CTL** | Chronic Training Load · Fitness | Dit langsigtede træningsniveau. Stiger langsomt over uger og måneder. Beregnes over 42 dage. |
+| **ATL** | Acute Training Load · Træthed | Din kortsigtede træthed. Stiger hurtigt efter hård træning og falder hurtigt ved hvile. Beregnes over 7 dage. |
+| **TSB** | Training Stress Balance · Form | Din aktuelle form = CTL minus ATL. Positivt = frisk og klar. Negativt = træt. |
+| **TSS** | Training Stress Score | Et enkelt tal der beskriver hvor hård en træning var. Let 1-times tur ≈ 40. Hård bjergdag ≈ 150-200. |
 
 ### Hvad er en god TSB på race day?
 
@@ -53,61 +55,66 @@ Form-tracker bruger tre nøgletal fra sportsfysiologi:
 | Under -20 | Meget træt — for meget træning |
 | -20 til -5 | Træt — reducer belastning |
 | -5 til +5 | Neutral |
-| +5 til +15 | **Optimal form** — frisk men ikke aftränet |
+| **+5 til +15** | **Optimal form — frisk men ikke aftränet** |
 | Over +25 | For frisk — fitness er faldet |
 
-Målet er at ramme race day med TSB mellem **+5 og +15**.
+### W/kg
 
-### Hvad er W/kg?
+- **W/kg krop** = FTP ÷ kropsvægt
+- **W/kg system** = FTP ÷ (krop + cykel + vand + udstyr)
 
-Watt per kilo er det vigtigste tal i cykelsport — især i bjerge.
-- **W/kg krop** = FTP divideret med din kropsvægt
-- **W/kg system** = FTP divideret med din samlede systemvægt (krop + cykel + vand + udstyr)
-
-Jo højere W/kg, jo bedre klatrer du.
+Jo højere W/kg, jo bedre klatrer du i bjerge.
 
 ---
 
-## 👤 Min profil
+## 👤 Min profil og plan-generator
 
-Her indtaster du dine personlige data. Alt gemmes automatisk i din browser.
+Her indtaster du dine data. Alt gemmes og synkroniseres automatisk til skyen.
 
 | Felt | Hvad skal jeg skrive? |
 |------|-----------------------|
-| **FTP (W)** | Din Functional Threshold Power i watt. Find den med en FTP-test eller aflæs fra Garmin/Wahoo. |
-| **Vægt (kg)** | Din kropsvægt i kg — eks. 77 |
+| **FTP (W)** | Din Functional Threshold Power i watt |
+| **Vægt (kg)** | Din kropsvægt — eks. 77 |
 | **Cykel (kg)** | Din cykels vægt — eks. 8,5 |
-| **Dunke (×750ml)** | Antal vandflasker du typisk kører med — eks. 2 |
+| **Dunke (×750ml)** | Antal vandflasker du typisk kører med |
 | **Udstyr (kg)** | Hjelm, sko, tøj, sadeltaske osv. — typisk 0,5-1,0 kg |
-| **Start CTL** | Din nuværende CTL/Fitness-værdi. Find den i Intervals.icu eller Garmin Connect. |
-| **Start ATL** | Din nuværende ATL/Træthed-værdi. Find den samme sted som CTL. |
-| **Start dato** | Den dato dine startværdier er fra — typisk i dag. |
+| **Start CTL** | Din nuværende CTL/Fitness-værdi fra Intervals.icu eller Garmin |
+| **Start ATL** | Din nuværende ATL/Træthed-værdi |
+| **Start dato** | Den dato dine startværdier er fra — typisk i dag |
+| **Race dato 🏔️** | Datoen for din vigtigste begivenhed |
+| **Base uge-TSS** | Din nuværende ugentlige træningsbelastning i TSS |
 
-### Sådan finder du CTL og ATL i Intervals.icu
+### Automatisk plan-generator
 
-1. Gå til **intervals.icu** og log ind
-2. Klik på **Fitness** i venstre menu
-3. Hold musen over grafen på dagens dato
-4. Aflæs **Fitness** (= CTL) og **Fatigue** (= ATL)
+Når du sætter **Race dato** og **Base uge-TSS** genereres en træningsplan automatisk med:
+
+- **4-ugers blokke**: uge 1 (basis), uge 2 (+5%), uge 3 (+10%), uge 4 (rolig = samme som uge 2)
+- **+15% per blok** efterhånden som sæsonen skrider frem
+- **Taper**: de sidste 2 uger reduceres til 50% og 30% for optimal form på race day
+- **Sessionstyper**: Z2 let (mandag), Tærskel (tirsdag), fri (onsdag), Z2 moderat (torsdag), Sweet spot (fredag), Lang Z2 (lørdag), fri (søndag)
+
+Planen opdateres automatisk når du ændrer race dato eller base uge-TSS.
 
 ### Faste fridage
 
-Klik på de ugedage du altid hviler. Disse dage får automatisk TSS = 0 i planen, medmindre du manuelt logger en træning.
+Klik på de ugedage du altid hviler. Disse dage får TSS = 0 automatisk.
+
+### Sådan finder du CTL og ATL
+
+1. Gå til **intervals.icu** → **Fitness** i venstre menu
+2. Hold musen over grafen på dagens dato
+3. Aflæs **Fitness** (= CTL) og **Fatigue** (= ATL)
 
 ---
 
 ## 🏔️ Mine bjerge
 
-Her tilføjer du de begivenheder du træner mod — fx etaper, bjergløb eller fleretagers ture.
+Tilføj de begivenheder du træner mod.
 
 ### Tilføj et bjerg
 
 1. Klik **+ Tilføj bjerg**
-2. Udfyld:
-   - **Navn** — eks. "Cykelnerven dag 1"
-   - **Dato** — datoen for begivenheden
-   - **TSS** — forventet sværhedsgrad (se tabel nedenfor)
-   - **Farve** — bruges til at markere dagen i grafen
+2. Udfyld navn, dato, TSS og farve
 3. Klik **Gem**
 
 ### Estimér TSS for en begivenhed
@@ -118,46 +125,34 @@ Her tilføjer du de begivenheder du træner mod — fx etaper, bjergløb eller f
 | Moderat 2-timers tur | 80-100 |
 | Hård 3-timers tur med stigninger | 120-150 |
 | Bjergdag 4-5 timer | 150-200 |
-| Ekstrem dag (gran fondo, Alpe d'Huez) | 200-300+ |
-
-> **Tip:** Har du kørt lignende ture før, kan du se den faktiske TSS i Garmin Connect eller Intervals.icu.
-
-### Rediger eller slet et bjerg
-
-- Klik **✏️** for at redigere navn, dato, TSS eller farve
-- Klik **🗑️** for at slette
+| Gran fondo / Alpe d'Huez | 200-300+ |
 
 ---
 
 ## 📈 Formkurven
 
-Grafen viser CTL (blå), ATL (rød) og TSB (grøn) over hele planperioden.
+Grafen viser **CTL · Fitness** (blå), **ATL · Træthed** (rød) og **TSB · Form** (grøn) over hele planperioden.
 
-- **Lodrette stiplede linjer** markerer dine bjerge/begivenheder
-- **✓** i tooltip betyder at dagen er logget med faktisk TSS
-- Hover over grafen for at se præcise værdier på en given dato
-
-Grafen opdateres automatisk når du ændrer din profil, tilføjer bjerge eller logger træninger.
+- Lodrette stiplede linjer markerer dine bjerge/begivenheder
+- ✓ i tooltip = loggede træninger med faktisk TSS
+- Hover over grafen for præcise værdier
 
 ---
 
 ## 📅 Dag-for-dag plan
 
-Tabellen viser en dag-for-dag oversigt fra startdatoen til og med det seneste bjerg.
+Tabellen viser en dag-for-dag oversigt fra startdatoen til race day.
 
 | Kolonne | Betydning |
 |---------|-----------|
 | **Dato** | Dag og dato |
 | **Session** | Planlagt træningstype |
-| **Plan TSS** | Forventet TSS ifølge planen |
+| **Plan TSS** | Forventet TSS |
 | **Logget TSS** | Din faktiske TSS (grøn badge hvis logget) |
-| **CTL/ATL/TSB** | Beregnede værdier for den dag |
-| **+/✏️** | Klik for at logge eller redigere dagen |
+| **CTL · Fitness / ATL · Træthed / TSB · Form** | Beregnede værdier |
+| **+/✏️** | Log eller rediger dagen |
 
-Farver i tabellen:
-- 🟤 **Brun** = bjerg/race dag
-- **Nedtonet** = fridag
-- 🟢 **Mørkegrøn** = logget træning
+Farver: 🟤 brun = bjerg/race, nedtonet = fridag, 🟢 mørkegrøn = logget.
 
 ---
 
@@ -165,61 +160,34 @@ Farver i tabellen:
 
 ### Automatisk pop-up
 
-Hver dag du åbner appen vises automatisk en pop-up for dagens dato (hvis ikke allerede logget). Den viser:
-- Den planlagte session og TSS
-- Et felt til at skrive din faktiske TSS
-- Et notefelt (valgfrit)
-
-Klik **Gem ✓** for at gemme, eller **Spring over** for at bruge plan-TSS.
+Hver dag åbner appen med en pop-up for dagens dato (hvis ikke allerede logget). Skriv faktisk TSS og evt. en note.
 
 ### Manuel logning
 
 1. Gå til **Dag-for-dag plan**
-2. Find den dato du vil logge
-3. Klik **+** (eller **✏️** hvis allerede logget)
-4. Indtast faktisk TSS og evt. en note
-5. Klik **Gem ✓**
+2. Find datoen og klik **+**
+3. Indtast faktisk TSS og note → **Gem ✓**
 
 Loggede træninger påvirker CTL/ATL/TSB-beregningen fra den dato og frem.
-
-### Se alle loggede træninger
-
-Klik på **Loggede træninger** fanen for en oversigt over alle dine loggede dage, sorteret med nyeste øverst.
 
 ---
 
 ## 📥 Importer fra Garmin / Intervals.icu / Strava
 
-I stedet for at logge manuelt kan du importere dine træninger direkte fra en CSV-fil.
-
-Klik **📥 Importer træninger** øverst til højre (eller i Loggede træninger-fanen).
+Klik **📥 Importer** øverst til højre.
 
 ### Intervals.icu
-
-1. Gå til **intervals.icu** og log ind
-2. Klik **Aktiviteter** i venstre menu
-3. Klik **⋮** øverst til højre → **Eksporter CSV**
-4. Upload filen i appen
+1. **intervals.icu** → Aktiviteter → **⋮ → Eksporter CSV**
 
 ### Garmin Connect
-
-1. Gå til **connect.garmin.com**
-2. Klik **Aktiviteter** → vælg datointerval
-3. Klik **Eksporter CSV** øverst til højre
-4. Upload filen i appen
+1. **connect.garmin.com** → Aktiviteter → **Eksporter CSV**
 
 ### Strava
-
-1. Gå til **strava.com** → Indstillinger
-2. Klik **Mit konto** → **Download eller slet dine data**
-3. Pak ZIP-filen ud og find **activities.csv**
-4. Upload filen i appen
+1. **strava.com** → Indstillinger → Download dine data → pak ZIP ud → find `activities.csv`
 > ⚠️ TSS kræver Strava Premium
 
-### Simpel CSV (manuel)
-
-Du kan også lave en simpel tekstfil med Excel eller Notesblok:
-
+### Simpel CSV
+Lav en fil med Excel eller Notesblok:
 ```
 date,tss
 2025-06-01,75
@@ -227,34 +195,64 @@ date,tss
 2025-06-03,95
 ```
 
-Gem filen som `.csv` og upload den i appen.
+---
 
-### Vælg importstrategi
+## ☁️ Cloud sync — data på alle enheder
 
-Når du har valgt en fil får du to muligheder:
-- **Overskriv eksisterende** — erstatter dage der allerede er logget
-- **Behold eksisterende** — springer dage over der allerede er logget
+Dine data gemmes i **Firebase Firestore** og synkroniseres automatisk:
+
+- Logger du ind på iPhone ser du præcis de samme data som på PC
+- Ændringer gemmes til skyen ~1 sekund efter du stopper med at skrive
+- `↑ gemmer` vises ved dit navn mens data uploades
+- **Offline**: appen virker uden internet og synkroniserer når du er online igen
 
 ---
 
 ## 📱 Gem til hjemmeskærm (iPhone)
 
-Du kan bruge appen som en rigtig app på din iPhone:
-
 1. Åbn **https://skndkprivat.github.io/Form-Tracker/** i Safari
-2. Tryk på **Del-ikonet** (firkant med pil op) nederst
-3. Vælg **Føj til hjemmeskærm**
-4. Tryk **Tilføj**
+2. Tryk på **Del-ikonet** (firkant med pil op)
+3. Vælg **Føj til hjemmeskærm** → **Tilføj**
 
-Appen åbner nu i fuld skærm uden browserens adresselinje — ligesom en rigtig app.
-
-> **NB:** Data gemmes lokalt i den browser/app du bruger. Data på iPhone og PC deles ikke automatisk. Brug CSV-import til at synkronisere data mellem enheder.
+Appen åbner nu i fuld skærm som en rigtig app.
 
 ---
 
-## 🛠️ Opdater koden
+## 🛠️ Lokal udvikling
 
-Når der er ændringer i koden:
+```bash
+# Klon repo
+git clone https://github.com/skndkprivat/Form-Tracker.git
+cd Form-Tracker
+
+# Opret .env fil med Firebase credentials (se .env.example)
+cp .env.example .env
+# Udfyld værdierne i .env
+
+# Installer og kør
+npm install
+npm run dev
+```
+
+### Miljøvariabler
+
+Kopier `.env.example` til `.env` og udfyld med dine Firebase-værdier:
+
+```
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=...
+VITE_FIREBASE_PROJECT_ID=...
+VITE_FIREBASE_STORAGE_BUCKET=...
+VITE_FIREBASE_MESSAGING_SENDER_ID=...
+VITE_FIREBASE_APP_ID=...
+```
+
+> ⚠️ `.env` filen må aldrig committes til Git — den er i `.gitignore`.
+> Firebase credentials til GitHub Actions gemmes som **Repository Secrets** under Settings → Secrets and variables → Actions.
+
+---
+
+## 🚀 Opdater og deploy
 
 ```bash
 cd C:\Tools\Form-Tracker
@@ -269,12 +267,14 @@ GitHub Actions bygger og deployer automatisk inden for ~1 minut.
 
 ## 🔧 Teknisk stack
 
-- **React 18** + **Vite** — frontend framework og build tool
-- **Recharts** — grafer
-- **Firebase Authentication** — Google login
-- **localStorage** — lokal datalagring
-- **GitHub Pages** — hosting (gratis)
-- **GitHub Actions** — automatisk build og deploy
+| Teknologi | Formål |
+|-----------|--------|
+| **React 18** + **Vite** | Frontend framework og build tool |
+| **Recharts** | Grafer og visualisering |
+| **Firebase Auth** | Google login |
+| **Firebase Firestore** | Cloud database og realtid-sync |
+| **GitHub Pages** | Hosting (gratis) |
+| **GitHub Actions** | Automatisk build og deploy |
 
 ---
 
