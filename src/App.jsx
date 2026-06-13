@@ -1,5 +1,6 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useAuth, LoginScreen, UserBadge } from "./LoginScreen.jsx";
+import { saveToFirestore, loadFromFirestore, subscribeToFirestore } from "./firebase.js";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer
 } from "recharts";
@@ -9,8 +10,6 @@ const fmtDate = (d) => d.toLocaleDateString("da-DK", { weekday: "short", day: "n
 const isoDate = (d) => d.toISOString().slice(0, 10);
 const todayIso = () => isoDate(new Date());
 const WEEKDAYS = ["søn", "man", "tirs", "ons", "tors", "fre", "lør"];
-const LS  = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
-const LSset = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
 const MOUNTAIN_PRESETS = [
   { id: 1, name: "VEN-TOP",          date: "2025-05-25", tss: 150, color: "#f97316" },
@@ -19,13 +18,19 @@ const MOUNTAIN_PRESETS = [
   { id: 4, name: "Cykelnerven dag 3", date: "2025-06-13", tss: 160, color: "#8b5cf6" },
 ];
 
-// ─── Progressiv plan-generator ───────────────────────────────────────────────
-// 4-ugers blokke: uge1 (base), uge2 (+5%), uge3 (+10%), uge4 (rolig=uge2)
-// Taper: -2 uger = 50%, -1 uge = 30%
+const DEFAULT_STATE = {
+  ftp: 180, weight: 77, bikeKg: 8.5, bottles: 2, extraKg: 0.7,
+  startCTL: 67.3, startATL: 67.4,
+  startDateStr: "2025-05-22", raceDateStr: "2025-06-13",
+  baseWeeklyTSS: 350, restDays: [0, 3],
+  mountains: MOUNTAIN_PRESETS, logged: {},
+};
+
+// ─── Plan generator ───────────────────────────────────────────────────────────
 const DAY_WEIGHTS = { 0:0, 1:0.18, 2:0.20, 3:0, 4:0.17, 5:0.18, 6:0.27 };
 const DAY_LABELS  = {
-  0: "Fri 🛌", 1: "Z2 let", 2: "Tærskel intervaller",
-  3: "Fri 🚫", 4: "Z2 moderat", 5: "Sweet spot", 6: "Lang Z2",
+  0:"Fri 🛌", 1:"Z2 let", 2:"Tærskel intervaller",
+  3:"Fri 🚫", 4:"Z2 moderat", 5:"Sweet spot", 6:"Lang Z2",
 };
 
 function generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays) {
@@ -36,36 +41,28 @@ function generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays) {
   const totalDays = Math.round((race - start) / msDay) + 1;
   if (totalDays <= 0) return [];
   const totalWeeks = Math.ceil(totalDays / 7);
-
-  // Byg ugernes TSS med 4-ugers blokke
   const weeklyTSS = [];
   for (let w = 0; w < totalWeeks; w++) {
     const weeksToRace = totalWeeks - w;
     let tss;
-    if (weeksToRace === 1) {
-      tss = Math.round(baseWeeklyTSS * 0.30);
-    } else if (weeksToRace === 2) {
-      tss = Math.round(baseWeeklyTSS * 0.50);
-    } else {
-      const posInBlock = w % 4;
-      const blockNum   = Math.floor(w / 4);
-      const blockBase  = Math.round(baseWeeklyTSS * Math.pow(1.15, blockNum)); // +15% pr blok
-      if (posInBlock === 0) tss = blockBase;
+    if (weeksToRace === 1)      tss = Math.round(baseWeeklyTSS * 0.30);
+    else if (weeksToRace === 2) tss = Math.round(baseWeeklyTSS * 0.50);
+    else {
+      const posInBlock = w % 4, blockNum = Math.floor(w / 4);
+      const blockBase = Math.round(baseWeeklyTSS * Math.pow(1.15, blockNum));
+      if (posInBlock === 0)      tss = blockBase;
       else if (posInBlock === 1) tss = Math.round(blockBase * 1.05);
       else if (posInBlock === 2) tss = Math.round(blockBase * 1.10);
-      else tss = Math.round(blockBase * 1.05); // rolig = uge 2
+      else                       tss = Math.round(blockBase * 1.05);
     }
     weeklyTSS.push(tss);
   }
-
-  // Byg dag-for-dag
   const plan = [];
   for (let i = 0; i < totalDays; i++) {
     const d = new Date(start.getTime() + i * msDay);
     const weekIdx = Math.min(Math.floor(i / 7), totalWeeks - 1);
     const weekday = d.getDay();
     const isRestDay = restDays.includes(weekday) || DAY_WEIGHTS[weekday] === 0;
-
     let tss = 0, label = DAY_LABELS[weekday] || "Fri";
     if (!isRestDay) {
       const activeDays = Object.entries(DAY_WEIGHTS).filter(([d]) => !restDays.includes(+d) && DAY_WEIGHTS[+d] > 0);
@@ -161,6 +158,7 @@ function normalizeDate(raw) {
   return null;
 }
 
+// ─── Modaler ──────────────────────────────────────────────────────────────────
 function ImportModal({ onImport, onClose }) {
   const [step, setStep] = useState("choose");
   const [format, setFormat] = useState("");
@@ -174,7 +172,7 @@ function ImportModal({ onImport, onClose }) {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const { rows, format: fmt } = parseCSV(ev.target.result);
-      if (rows.length === 0) { setError(`Kunne ikke læse TSS-data.\nFormat: ${fmt}`); setStep("choose"); }
+      if (rows.length === 0) { setError(`Kunne ikke læse TSS-data.\nFormat: ${fmt}`); }
       else { setFormat(fmt); setPreview(rows.slice(0, 200)); setError(""); setStep("preview"); }
     };
     reader.readAsText(file, "utf-8");
@@ -217,7 +215,7 @@ function ImportModal({ onImport, onClose }) {
           </div>
         </>)}
         {step === "done" && (<>
-          <div className="import-done"><div className="import-done-icon">✅</div><div className="import-done-title">{importedCount} importeret</div><div className="import-done-sub">CTL/ATL/TSB opdateret</div></div>
+          <div className="import-done"><div className="import-done-icon">✅</div><div className="import-done-title">{importedCount} importeret</div><div className="import-done-sub">Gemmes til sky automatisk</div></div>
           <button className="btn-save" onClick={onClose}>Luk</button>
         </>)}
       </div>
@@ -278,6 +276,7 @@ function ChartTooltip({ active, payload }) {
   );
 }
 
+// ─── Auth wrapper ─────────────────────────────────────────────────────────────
 export default function FormTracker() {
   const user = useAuth();
   if (user === undefined) return (
@@ -289,45 +288,76 @@ export default function FormTracker() {
   return <AppInner user={user} />;
 }
 
+// ─── Hoved-app med Firestore sync ─────────────────────────────────────────────
 function AppInner({ user }) {
-  const [ftp,          setFtp]          = useState(() => LS("ft_ftp", 180));
-  const [weight,       setWeight]       = useState(() => LS("ft_weight", 77));
-  const [bikeKg,       setBikeKg]       = useState(() => LS("ft_bikeKg", 8.5));
-  const [bottles,      setBottles]      = useState(() => LS("ft_bottles", 2));
-  const [extraKg,      setExtraKg]      = useState(() => LS("ft_extraKg", 0.7));
-  const [startCTL,     setStartCTL]     = useState(() => LS("ft_startCTL", 67.3));
-  const [startATL,     setStartATL]     = useState(() => LS("ft_startATL", 67.4));
-  const [startDateStr, setStartDateStr] = useState(() => LS("ft_startDate", "2025-05-22"));
-  const [raceDateStr,  setRaceDateStr]  = useState(() => LS("ft_raceDate", "2025-06-13"));
-  const [baseWeeklyTSS,setBaseWeeklyTSS]= useState(() => LS("ft_baseWeeklyTSS", 350));
-  const [restDays,     setRestDays]     = useState(() => LS("ft_restDays", [0, 3]));
-  const [mountains,    setMountains]    = useState(() => LS("ft_mountains", MOUNTAIN_PRESETS));
-  const [logged,       setLogged]       = useState(() => LS("ft_logged", {}));
+  const [appState, setAppState] = useState(null); // null = indlæser fra Firestore
+  const [syncing,  setSyncing]  = useState(false);
+  const [saveMsg,  setSaveMsg]  = useState("");
+  const saveTimer = useRef(null);
+  const isRemoteUpdate = useRef(false);
+
+  // Indlæs data fra Firestore ved login
+  useEffect(() => {
+    loadFromFirestore(user.uid).then(data => {
+      if (data) {
+        setAppState({ ...DEFAULT_STATE, ...data });
+      } else {
+        setAppState(DEFAULT_STATE);
+      }
+    });
+
+    // Lyt på realtid-opdateringer fra andre enheder
+    const unsub = subscribeToFirestore(user.uid, (data) => {
+      isRemoteUpdate.current = true;
+      setAppState(prev => prev ? { ...prev, ...data } : { ...DEFAULT_STATE, ...data });
+    });
+    return unsub;
+  }, [user.uid]);
+
+  // Gem til Firestore med debounce (1 sekund efter sidste ændring)
+  const scheduleSync = useCallback((newState) => {
+    if (isRemoteUpdate.current) { isRemoteUpdate.current = false; return; }
+    setSyncing(true);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      await saveToFirestore(user.uid, newState);
+      setSyncing(false);
+      setSaveMsg("Gemt til sky ☁️");
+      setTimeout(() => setSaveMsg(""), 2000);
+    }, 1000);
+  }, [user.uid]);
+
+  const update = useCallback((key, val) => {
+    setAppState(prev => {
+      const next = { ...prev, [key]: val };
+      scheduleSync(next);
+      return next;
+    });
+  }, [scheduleSync]);
+
+  // Vis loading mens Firestore henter data
+  if (!appState) return (
+    <div style={{minHeight:"100vh",background:"#0a0f1e",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",fontFamily:"Inter,system-ui,sans-serif",fontSize:16,flexDirection:"column",gap:12}}>
+      <div style={{fontSize:32}}>☁️</div>
+      Henter dine data...
+    </div>
+  );
+
+  const {
+    ftp, weight, bikeKg, bottles, extraKg,
+    startCTL, startATL, startDateStr, raceDateStr, baseWeeklyTSS,
+    restDays, mountains, logged
+  } = appState;
+
   const [editingMountain, setEditingMountain] = useState(null);
   const [showAddModal,    setShowAddModal]    = useState(false);
   const [logModal,        setLogModal]        = useState(null);
   const [showImport,      setShowImport]      = useState(false);
   const [activeTab,       setActiveTab]       = useState("chart");
-  const [saveMsg,         setSaveMsg]         = useState("");
-
-  useEffect(() => { LSset("ft_ftp",          ftp);          }, [ftp]);
-  useEffect(() => { LSset("ft_weight",        weight);       }, [weight]);
-  useEffect(() => { LSset("ft_bikeKg",        bikeKg);       }, [bikeKg]);
-  useEffect(() => { LSset("ft_bottles",       bottles);      }, [bottles]);
-  useEffect(() => { LSset("ft_extraKg",       extraKg);      }, [extraKg]);
-  useEffect(() => { LSset("ft_startCTL",      startCTL);     }, [startCTL]);
-  useEffect(() => { LSset("ft_startATL",      startATL);     }, [startATL]);
-  useEffect(() => { LSset("ft_startDate",     startDateStr); }, [startDateStr]);
-  useEffect(() => { LSset("ft_raceDate",      raceDateStr);  }, [raceDateStr]);
-  useEffect(() => { LSset("ft_baseWeeklyTSS", baseWeeklyTSS);}, [baseWeeklyTSS]);
-  useEffect(() => { LSset("ft_restDays",      restDays);     }, [restDays]);
-  useEffect(() => { LSset("ft_mountains",     mountains);    }, [mountains]);
-  useEffect(() => { LSset("ft_logged",        logged);       }, [logged]);
 
   const startDate    = useMemo(() => new Date(startDateStr + "T12:00:00"), [startDateStr]);
   const systemWeight = weight + bikeKg + bottles * 0.75 + extraKg;
 
-  // Generer plan dynamisk baseret på race-dato og baseWeeklyTSS
   const planDays = useMemo(() =>
     generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays),
     [startDateStr, raceDateStr, baseWeeklyTSS, restDays]
@@ -342,27 +372,41 @@ function AppInner({ user }) {
     const today = todayIso();
     if (logged[today] !== undefined) return;
     const row = series.find(s => s.date === today);
-    if (row && !row.isMountain) { const t = setTimeout(() => setLogModal(row), 600); return () => clearTimeout(t); }
+    if (row && !row.isMountain) { const t = setTimeout(() => setLogModal(row), 800); return () => clearTimeout(t); }
   }, []);
 
   const sortedMountains = [...mountains].sort((a,b) => a.date.localeCompare(b.date));
   const lastMountain    = sortedMountains[sortedMountains.length - 1];
   const raceRow         = series.find(s => s.date === lastMountain?.date) || series[series.length - 1];
   const todayRow        = series.find(s => s.date === todayIso()) || series[0];
-  const toggleRestDay   = d => setRestDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
-  const saveLog = (date, entry) => { setLogged(prev => ({ ...prev, [date]: entry })); setLogModal(null); setSaveMsg("Gemt ✓"); setTimeout(() => setSaveMsg(""), 2000); };
-  const deleteLog = date => setLogged(prev => { const n = { ...prev }; delete n[date]; return n; });
+
+  const toggleRestDay = d => update("restDays", restDays.includes(d) ? restDays.filter(x => x !== d) : [...restDays, d]);
+
+  const saveLog = (date, entry) => {
+    const newLogged = { ...logged, [date]: entry };
+    update("logged", newLogged);
+    setLogModal(null);
+    setSaveMsg("Gemt ✓"); setTimeout(() => setSaveMsg(""), 2000);
+  };
+  const deleteLog = date => {
+    const newLogged = { ...logged }; delete newLogged[date];
+    update("logged", newLogged);
+  };
   const handleImport = (rows, mode) => {
-    setLogged(prev => {
-      const next = { ...prev };
-      rows.forEach(r => { if (mode === "keep" && next[r.date]) return; next[r.date] = { tss: r.tss, note: r.name !== "Importeret" ? r.name : "" }; });
-      return next;
-    });
+    const next = { ...logged };
+    rows.forEach(r => { if (mode === "keep" && next[r.date]) return; next[r.date] = { tss: r.tss, note: r.name !== "Importeret" ? r.name : "" }; });
+    update("logged", next);
     setSaveMsg(`${rows.length} træninger importeret ✓`); setTimeout(() => setSaveMsg(""), 3000);
   };
-  const saveMountain   = m => { setMountains(prev => prev.map(p => p.id === m.id ? { ...m, tss: +m.tss } : p)); setEditingMountain(null); };
-  const addMountain    = m => { setMountains(prev => [...prev, { ...m, id: Date.now(), tss: +m.tss }]); setShowAddModal(false); };
-  const deleteMountain = id => setMountains(prev => prev.filter(m => m.id !== id));
+  const saveMountain = m => {
+    update("mountains", mountains.map(p => p.id === m.id ? { ...m, tss: +m.tss } : p));
+    setEditingMountain(null);
+  };
+  const addMountain = m => {
+    update("mountains", [...mountains, { ...m, id: Date.now(), tss: +m.tss }]);
+    setShowAddModal(false);
+  };
+  const deleteMountain = id => update("mountains", mountains.filter(m => m.id !== id));
   const newMountainTemplate = { id: null, name: "Nyt bjerg", date: isoDate(new Date()), tss: 120, color: "#06b6d4" };
 
   return (
@@ -373,48 +417,40 @@ function AppInner({ user }) {
           <div className="header-title">
             <span className="pill">Form-tracker</span>
             <h1>Mod Alperne 🏔️</h1>
-            <p className="subtitle">FTP · CTL · ATL · TSB — planlæg din form mod næste begivenhed</p>
+            <p className="subtitle">FTP · CTL · ATL · TSB — synkroniseret på tværs af enheder</p>
           </div>
           <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-            <UserBadge user={user} />
-            <button className="btn-import-header" onClick={() => setShowImport(true)}>📥 Importer træninger</button>
+            <UserBadge user={user} syncing={syncing} />
+            <button className="btn-import-header" onClick={() => setShowImport(true)}>📥 Importer</button>
           </div>
         </div>
         <div className="stats-row">
           <Stat label="W/kg krop"   value={(ftp/weight).toFixed(2)}       sub={`${ftp}W / ${weight}kg`} />
           <Stat label="W/kg system" value={(ftp/systemWeight).toFixed(2)} sub="inkl. cykel + dunke" />
-          <Stat
-            label="CTL · Fitness"
-            value={todayRow?.ctl}
-            sub2="ATL · Træthed"
-            value2={todayRow?.atl}
-            color="#60a5fa"
-            color2="#f87171"
-          />
-          <Stat
-            label="TSB · Form"
+          <Stat label="CTL · Fitness" value={todayRow?.ctl} color="#60a5fa"
+            sub2="ATL · Træthed" value2={todayRow?.atl} color2="#f87171" />
+          <Stat label="TSB · Form"
             value={(todayRow?.tsb >= 0 ? "+" : "") + todayRow?.tsb}
             color={todayRow?.tsb > 5 ? "#4ade80" : todayRow?.tsb < -5 ? "#f87171" : "#facc15"}
-            sub={`Race: ${(raceRow?.tsb >= 0 ? "+" : "") + raceRow?.tsb}`}
-          />
+            sub={`Race TSB: ${(raceRow?.tsb >= 0 ? "+" : "") + raceRow?.tsb}`} />
         </div>
         {saveMsg && <div className="save-toast">{saveMsg}</div>}
       </header>
 
       <main>
         <section className="card">
-          <h2>Min profil <span className="auto-save-note">· gemmes automatisk</span></h2>
+          <h2>Min profil <span className="auto-save-note">· synkroniseres automatisk ☁️</span></h2>
           <div className="grid-4">
-            <Field label="FTP (W)"          value={ftp}           onChange={setFtp}           type="number" />
-            <Field label="Vægt (kg)"        value={weight}        onChange={setWeight}        type="number" />
-            <Field label="Cykel (kg)"       value={bikeKg}        onChange={setBikeKg}        type="number" />
-            <Field label="Dunke (×750ml)"   value={bottles}       onChange={setBottles}       type="number" />
-            <Field label="Udstyr (kg)"      value={extraKg}       onChange={setExtraKg}       type="number" />
-            <Field label="Start CTL"        value={startCTL}      onChange={setStartCTL}      type="number" />
-            <Field label="Start ATL"        value={startATL}      onChange={setStartATL}      type="number" />
-            <Field label="Start dato"       value={startDateStr}  onChange={setStartDateStr}  type="date"   />
-            <Field label="Race dato 🏔️"     value={raceDateStr}   onChange={setRaceDateStr}   type="date"   />
-            <Field label="Base uge-TSS"     value={baseWeeklyTSS} onChange={setBaseWeeklyTSS} type="number" />
+            <Field label="FTP (W)"        value={ftp}           onChange={v => update("ftp", v)}           type="number" />
+            <Field label="Vægt (kg)"      value={weight}        onChange={v => update("weight", v)}        type="number" />
+            <Field label="Cykel (kg)"     value={bikeKg}        onChange={v => update("bikeKg", v)}        type="number" />
+            <Field label="Dunke (×750ml)" value={bottles}       onChange={v => update("bottles", v)}       type="number" />
+            <Field label="Udstyr (kg)"    value={extraKg}       onChange={v => update("extraKg", v)}       type="number" />
+            <Field label="Start CTL"      value={startCTL}      onChange={v => update("startCTL", v)}      type="number" />
+            <Field label="Start ATL"      value={startATL}      onChange={v => update("startATL", v)}      type="number" />
+            <Field label="Start dato"     value={startDateStr}  onChange={v => update("startDateStr", v)}  type="date"   />
+            <Field label="Race dato 🏔️"   value={raceDateStr}   onChange={v => update("raceDateStr", v)}   type="date"   />
+            <Field label="Base uge-TSS"   value={baseWeeklyTSS} onChange={v => update("baseWeeklyTSS", v)} type="number" />
           </div>
           <div className="rest-days">
             <label className="rest-label">Faste fridage</label>
@@ -423,7 +459,7 @@ function AppInner({ user }) {
             </div>
           </div>
           <div className="plan-info">
-            📅 Planen genereres automatisk fra <strong>{startDateStr}</strong> til <strong>{raceDateStr}</strong> med {planDays.length} dage · {Math.ceil(planDays.length/7)} uger
+            📅 Plan: <strong>{startDateStr}</strong> → <strong>{raceDateStr}</strong> · {planDays.length} dage · {Math.ceil(planDays.length/7)} uger · 4-ugers blokke med rolig uge · taper de sidste 2 uger
           </div>
         </section>
 
@@ -462,7 +498,7 @@ function AppInner({ user }) {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={series} margin={{top:8,right:16,bottom:0,left:-8}}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="label" tick={{fill:"#64748b",fontSize:10}} interval={Math.max(1, Math.floor(series.length/15))} />
+                  <XAxis dataKey="label" tick={{fill:"#64748b",fontSize:10}} interval={Math.max(1,Math.floor(series.length/15))} />
                   <YAxis tick={{fill:"#64748b",fontSize:11}} />
                   <Tooltip content={<ChartTooltip />} />
                   {sortedMountains.map(m => { const row = series.find(s => s.date === m.date); return row ? <ReferenceLine key={m.id} x={row.label} stroke={m.color} strokeDasharray="4 2" label={{value:"🏔️ "+m.name,fill:m.color,fontSize:10,position:"top"}} /> : null; })}
@@ -540,12 +576,10 @@ function Stat({ label, value, sub, sub2, value2, color, color2 }) {
     <div className="stat">
       <div className="stat-value" style={color?{color}:{}}>{value}</div>
       <div className="stat-label">{label}</div>
-      {value2 !== undefined && (
-        <>
-          <div className="stat-value stat-value2" style={color2?{color:color2}:{}}>{value2}</div>
-          <div className="stat-label">{sub2}</div>
-        </>
-      )}
+      {value2 !== undefined && <>
+        <div className="stat-value stat-value2" style={color2?{color:color2}:{}}>{value2}</div>
+        <div className="stat-label">{sub2}</div>
+      </>}
       {sub && <div className="stat-sub">{sub}</div>}
     </div>
   );
@@ -579,7 +613,7 @@ const CSS = `
   .stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
   @media(max-width:600px) { .stats-row { grid-template-columns: repeat(2,1fr); } .header-top { flex-direction: column; gap: 12px; } }
   .stat { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 12px 14px; }
-  .stat-value { font-size: 22px; font-weight: 700; color: #a5b4fc; }
+  .stat-value { font-size: 22px; font-weight: 700; color: #a5b4fc; line-height: 1.1; }
   .stat-value2 { font-size: 16px; font-weight: 700; margin-top: 6px; }
   .stat-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
   .stat-sub { font-size: 11px; color: #475569; margin-top: 4px; }
@@ -600,7 +634,7 @@ const CSS = `
   .day-btn { background: #1e293b; border: 1px solid #334155; color: #94a3b8; border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
   .day-btn.active { background: #312e81; border-color: #6366f1; color: #a5b4fc; }
   .day-btn:hover { border-color: #6366f1; }
-  .plan-info { margin-top: 14px; background: #1e293b; border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #64748b; }
+  .plan-info { margin-top: 14px; background: #1e293b; border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #64748b; line-height: 1.6; }
   .plan-info strong { color: #94a3b8; }
   .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .section-header h2 { margin-bottom: 0; }

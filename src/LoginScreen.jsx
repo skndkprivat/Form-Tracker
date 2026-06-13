@@ -20,12 +20,9 @@ export function LoginScreen() {
     try {
       await signInWithGoogle();
     } catch (e) {
-      // auth/popup-blocked = popup blev blokeret af browseren
       if (e.code === "auth/popup-blocked") {
-        setError("Popup blev blokeret — tillad popups for denne side i din browser og prøv igen.");
-      } else if (e.code === "auth/cancelled-popup-request") {
-        // bruger lukkede popup — ignorer
-      } else {
+        setError("Popup blev blokeret — tillad popups for denne side og prøv igen.");
+      } else if (e.code !== "auth/cancelled-popup-request") {
         setError("Login fejlede (" + (e.code || e.message) + ")");
       }
       setLoading(false);
@@ -74,15 +71,14 @@ export function LoginScreen() {
         )}
 
         <p style={{ color: "#334155", fontSize: 12, textAlign: "center" }}>
-          Et Google-vindue åbner sig.<br/>
-          Tillad popups hvis browseren spørger.
+          Dine data synkroniseres automatisk<br/>mellem alle dine enheder via Firebase.
         </p>
       </div>
     </div>
   );
 }
 
-export function UserBadge({ user }) {
+export function UserBadge({ user, syncing }) {
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 10,
@@ -96,6 +92,7 @@ export function UserBadge({ user }) {
           </div>
       }
       <span style={{ color: "#cbd5e1", fontSize: 13 }}>{user.displayName || user.email}</span>
+      {syncing && <span style={{ color: "#4ade80", fontSize: 11 }}>↑ gemmer</span>}
       <button onClick={signOutUser} style={{
         background: "none", border: "none", color: "#475569",
         cursor: "pointer", fontSize: 12, marginLeft: 4, padding: 0
