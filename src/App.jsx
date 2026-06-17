@@ -26,11 +26,18 @@ const DEFAULT_STATE = {
   mountains: MOUNTAIN_PRESETS, logged: {},
 };
 
-const DAY_WEIGHTS = { 0:0, 1:0.18, 2:0.20, 3:0, 4:0.17, 5:0.18, 6:0.27 };
-const DAY_LABELS  = {
-  0:"Fri 🛌", 1:"Z2 let", 2:"Tærskel intervaller",
-  3:"Fri 🚫", 4:"Z2 moderat", 5:"Sweet spot", 6:"Lang Z2",
-};
+// Relative dag-vægte — weekend vægtes højere (lange ture)
+// Bruges til dynamisk fordeling af ugens TSS på aktive dage
+const DAY_BASE_WEIGHTS = { 0: 1.4, 1: 0.8, 2: 1.0, 3: 0.7, 4: 0.9, 5: 1.0, 6: 1.5 };
+
+function getDayLabel(weekday, weight) {
+  if (weight >= 1.4) return "Lang Z2";
+  if (weight >= 1.2) return "Lang Z2";
+  if (weekday === 2 || weekday === 5) return "Tærskel intervaller";
+  if (weight >= 0.9) return "Sweet spot";
+  if (weight >= 0.8) return "Z2 moderat";
+  return "Z2 let";
+}
 
 function generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays) {
   if (!startDateStr || !raceDateStr) return [];
@@ -40,6 +47,12 @@ function generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays) {
   const totalDays = Math.round((race - start) / msDay) + 1;
   if (totalDays <= 0) return [];
   const totalWeeks = Math.ceil(totalDays / 7);
+
+  // Aktive dage og deres samlede vægt
+  const activeDayNums = [0,1,2,3,4,5,6].filter(d => !restDays.includes(d));
+  const totalBaseW = activeDayNums.reduce((s, d) => s + DAY_BASE_WEIGHTS[d], 0);
+
+  // Ugentlig TSS med 4-ugers blokke + taper
   const weeklyTSS = [];
   for (let w = 0; w < totalWeeks; w++) {
     const weeksToRace = totalWeeks - w;
@@ -56,19 +69,21 @@ function generatePlan(startDateStr, raceDateStr, baseWeeklyTSS, restDays) {
     }
     weeklyTSS.push(tss);
   }
+
   const plan = [];
   for (let i = 0; i < totalDays; i++) {
     const d = new Date(start.getTime() + i * msDay);
     const weekIdx = Math.min(Math.floor(i / 7), totalWeeks - 1);
     const weekday = d.getDay();
-    const isRestDay = restDays.includes(weekday) || DAY_WEIGHTS[weekday] === 0;
-    let tss = 0, label = DAY_LABELS[weekday] || "Fri";
-    if (!isRestDay) {
-      const activeDays = Object.entries(DAY_WEIGHTS).filter(([d]) => !restDays.includes(+d) && DAY_WEIGHTS[+d] > 0);
-      const totalW = activeDays.reduce((s, [, w]) => s + w, 0);
-      tss = Math.max(20, Math.round((weeklyTSS[weekIdx] || 0) * DAY_WEIGHTS[weekday] / totalW));
+    const isRestDay = restDays.includes(weekday);
+
+    if (isRestDay) {
+      plan.push({ label: weekday === 0 || weekday === 6 ? "Fri 🛌" : "Fri 🚫", tss: 0 });
+    } else {
+      const relW = DAY_BASE_WEIGHTS[weekday] / totalBaseW;
+      const tss = Math.max(20, Math.round((weeklyTSS[weekIdx] || 0) * relW));
+      plan.push({ label: getDayLabel(weekday, DAY_BASE_WEIGHTS[weekday]), tss });
     }
-    plan.push({ label, tss });
   }
   return plan;
 }
@@ -183,13 +198,9 @@ function parseTCX(xmlText, ftp) {
           if (!startTime || t < startTime) startTime = t;
           if (!endTime || t > endTime) endTime = t;
         }
-        // Effekt — prøv flere XML-navnerum
         const powerEl = tp.querySelector("Watts") ||
-          tp.querySelector("ns3\\:Watts") ||
           [...tp.querySelectorAll("*")].find(el => el.localName === "Watts");
         if (powerEl) { totalPowerSum += +powerEl.textContent; powerCount++; }
-
-        // Puls
         const hrEl = tp.querySelector("Value");
         const hr = hrEl ? +hrEl.textContent : 0;
         if (hr > 30 && hr < 220) { totalHRSum += hr; hrCount++; }
@@ -204,31 +215,25 @@ function parseTCX(xmlText, ftp) {
       let tss = 0;
 
       if (powerCount > 10 && ftp > 0) {
-        // TSS fra effekt: (sek × NP × IF) / (FTP × 3600) × 100
-        // Approx NP ≈ gennemsnitseffekt × 1.05 (konservativt)
         const avgPower = totalPowerSum / powerCount;
         const np = avgPower * 1.05;
         const IF = np / ftp;
         tss = Math.round((durationSec * np * IF) / (ftp * 3600) * 100);
       } else if (hrCount > 10) {
-        // TRIMP-baseret HR estimat
         const avgHR = totalHRSum / hrCount;
         const hrMax = 185, hrRest = 55;
         const hrReserve = Math.max(0, Math.min(1, (avgHR - hrRest) / (hrMax - hrRest)));
         tss = Math.round(durationHours * hrReserve * hrReserve * 100);
       } else {
-        // Fallback: Z2 estimat
         tss = Math.round(durationHours * 55);
       }
 
-      if (tss > 0 && tss < 1500) {
-        rows.push({ date, tss, name });
-      }
+      if (tss > 0 && tss < 1500) rows.push({ date, tss, name });
     });
 
     return { rows, format: "TCX (Garmin/Wahoo)" };
   } catch (e) {
-    return { rows: [], format: "TCX (parse fejl: " + e.message + ")" };
+    return { rows: [], format: "TCX fejl: " + e.message };
   }
 }
 
@@ -239,56 +244,94 @@ function HelpModal({ onClose }) {
       <div className="modal help-modal" onClick={e => e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
           <h3>📖 Bruger Manual</h3>
-          <button onClick={onClose} style={{background:"none",border:"none",color:"#64748b",fontSize:20,cursor:"pointer",padding:"0 4px"}}>✕</button>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#64748b",fontSize:20,cursor:"pointer"}}>✕</button>
         </div>
         <div className="help-content">
           <h4>📊 Forstå tallene</h4>
-          <p><strong style={{color:"#60a5fa"}}>CTL · Fitness</strong> — Dit langsigtede træningsniveau (42-dages gennemsnit). Stiger langsomt med regelmæssig træning.</p>
-          <p><strong style={{color:"#f87171"}}>ATL · Træthed</strong> — Din kortsigtede træthed (7-dages gennemsnit). Stiger hurtigt efter hård træning, falder hurtigt ved hvile.</p>
-          <p><strong style={{color:"#4ade80"}}>TSB · Form</strong> = CTL minus ATL. Positivt tal = du er frisk og klar. Negativt = du er træt.</p>
-          <p><strong>TSS</strong> — Training Stress Score. Let 1-times tur ≈ 40. Hård bjergdag ≈ 150-200.</p>
+          <p><strong style={{color:"#60a5fa"}}>CTL · Fitness</strong> — Langsigtede træningsniveau (42-dages gennemsnit).</p>
+          <p><strong style={{color:"#f87171"}}>ATL · Træthed</strong> — Kortsigtede træthed (7-dages gennemsnit).</p>
+          <p><strong style={{color:"#4ade80"}}>TSB · Form</strong> = CTL − ATL. Positivt = frisk. Negativt = træt.</p>
+          <p><strong>TSS</strong> — Training Stress Score. Let 1t ≈ 40. Hård bjergdag ≈ 150-200.</p>
 
           <h4>🎯 Optimal TSB på race day</h4>
           <div className="help-table">
             <div className="help-row"><span>Under −20</span><span style={{color:"#f87171"}}>Meget træt</span></div>
-            <div className="help-row"><span>−20 til −5</span><span style={{color:"#f87171"}}>Træt — reducer belastning</span></div>
+            <div className="help-row"><span>−20 til −5</span><span style={{color:"#f87171"}}>Træt</span></div>
             <div className="help-row"><span>−5 til +5</span><span style={{color:"#facc15"}}>Neutral</span></div>
             <div className="help-row help-best-row"><span className="help-best">+5 til +15 ✓</span><span style={{color:"#4ade80"}}>Optimal form</span></div>
-            <div className="help-row"><span>Over +25</span><span style={{color:"#64748b"}}>For frisk — fitness er faldet</span></div>
+            <div className="help-row"><span>Over +25</span><span style={{color:"#64748b"}}>For frisk</span></div>
           </div>
 
-          <h4>👤 Min profil — startværdier</h4>
-          <p><strong>Start CTL · Fitness</strong> — Find i <em>Intervals.icu → Fitness</em> og aflæs "Fitness" på dagens dato.</p>
-          <p><strong>Start TSB · Form</strong> — Aflæs "Form" i Intervals.icu. ATL beregnes automatisk som CTL minus TSB.</p>
-          <p><strong>Race dato</strong> — Din vigtigste begivenhed. Planen genereres automatisk frem til den dato.</p>
-          <p><strong>Base uge-TSS</strong> — Din nuværende ugentlige træningsbelastning. Typisk 350-550 for aktive cykelryttere.</p>
+          <h4>👤 Startværdier</h4>
+          <p><strong>Start CTL/TSB</strong> — Aflæs i Intervals.icu → Fitness → hover over i dag.</p>
+          <p><strong>Base uge-TSS</strong> — Gennemsnit af dine normale træningsuger (eks. 450-500).</p>
 
-          <h4>🏔️ Automatisk plan-generator</h4>
-          <p>Planen bruger <strong>4-ugers blokke</strong>:</p>
-          <div className="help-table">
-            <div className="help-row"><span>Uge 1</span><span>Basis</span></div>
-            <div className="help-row"><span>Uge 2</span><span>+5%</span></div>
-            <div className="help-row"><span>Uge 3</span><span>+10%</span></div>
-            <div className="help-row"><span>Uge 4</span><span style={{color:"#4ade80"}}>Rolig (= uge 2)</span></div>
-            <div className="help-row"><span>−2 uger</span><span style={{color:"#a5b4fc"}}>Taper 50%</span></div>
-            <div className="help-row"><span>−1 uge</span><span style={{color:"#a5b4fc"}}>Taper 30%</span></div>
-          </div>
+          <h4>🏔️ Plan-generator</h4>
+          <p>TSS fordeles automatisk på dine aktive dage. <strong>Weekend-dage vægtes højere</strong> (lange ture). 4-ugers blokke med rolig uge + taper de sidste 2 uger.</p>
 
-          <h4>📥 Importer træninger</h4>
-          <p>Klik <strong>📥 Importer</strong> øverst og upload en fil:</p>
-          <div className="help-table">
-            <div className="help-row"><span>🔵 TCX fil</span><span>Fra Garmin Edge, Wahoo, Zwift</span></div>
-            <div className="help-row"><span>🟣 Intervals.icu CSV</span><span>Aktiviteter → ⋮ → Eksporter</span></div>
-            <div className="help-row"><span>🔵 Garmin CSV</span><span>Aktiviteter → Eksporter CSV</span></div>
-            <div className="help-row"><span>🟠 Strava</span><span>Indstillinger → Download data</span></div>
-          </div>
-          <p style={{fontSize:12,color:"#475569"}}>TCX: TSS beregnes fra effektdata (kræver powermeter) eller puls som fallback.</p>
-
-          <h4>✍️ Log dine træninger</h4>
-          <p>Klik <strong>+</strong> på en dag i planen for at logge faktisk TSS og tilføje en note.</p>
+          <h4>📁 Log træning / TCX upload</h4>
+          <p>Klik <strong>+</strong> på en dag → upload TCX direkte → TSS beregnes fra effekt eller puls automatisk.</p>
 
           <h4>☁️ Cloud sync</h4>
-          <p>Alle data gemmes automatisk i Firebase og synkroniseres på tværs af PC, iPhone og tablet.</p>
+          <p>Data synkroniseres automatisk mellem alle dine enheder via Firebase.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Log Modal med TCX upload ─────────────────────────────────────────────────
+function LogModal({ row, onSave, onSkip, ftp }) {
+  const [tss, setTss] = useState(String(row.planTss || 0));
+  const [note, setNote] = useState(row.logNote || "");
+  const [tcxLoading, setTcxLoading] = useState(false);
+  const fileRef = useRef();
+
+  const handleTCX = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setTcxLoading(true);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = parseTCX(ev.target.result, ftp || 200);
+      if (result.rows.length > 0) {
+        const match = result.rows.find(r => r.date === row.date) || result.rows[0];
+        setTss(String(match.tss));
+        if (match.name && match.name !== "TCX aktivitet") setNote(match.name);
+      }
+      setTcxLoading(false);
+    };
+    reader.readAsText(file, "utf-8");
+  };
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal log-modal">
+        <div className="log-modal-header">
+          <span className="log-badge">📋 Log træning</span>
+          <span className="log-date">{row.label}</span>
+        </div>
+        <div className="log-plan-box">
+          <div className="log-plan-label">Planlagt session</div>
+          <div className="log-plan-name">{row.planLabel}</div>
+          <div className="log-plan-tss">Plan TSS: <strong>{row.planTss || "—"}</strong></div>
+        </div>
+
+        <label className="tcx-upload-btn">
+          {tcxLoading ? "⏳ Læser TCX fil..." : "📁 Upload TCX fil — TSS beregnes automatisk"}
+          <input ref={fileRef} type="file" accept=".tcx" onChange={handleTCX} style={{display:"none"}} />
+        </label>
+
+        <label className="log-field">
+          <span>Faktisk TSS</span>
+          <input type="text" inputMode="decimal" value={tss} onChange={e => setTss(e.target.value)} autoFocus />
+        </label>
+        <label className="log-field">
+          <span>Note / aktivitetsnavn</span>
+          <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Udfyldes fra TCX eller skriv selv..." />
+        </label>
+        <div className="modal-btns">
+          <button className="btn-save" onClick={() => { const n = parseFloat(tss.replace(",",".")); onSave({ tss: isNaN(n)?0:n, note }); }}>Gem ✓</button>
+          <button className="btn-skip" onClick={onSkip}>Spring over</button>
         </div>
       </div>
     </div>
@@ -317,7 +360,7 @@ function ImportModal({ onImport, onClose, onFtp }) {
       }
       const { rows, format: fmt } = result;
       if (rows.length === 0) {
-        setError(`Kunne ikke læse data fra filen.\nDetekteret format: ${fmt}\n\nHvis det er en TCX-fil: sørg for at din FTP er sat korrekt i profilen.`);
+        setError(`Ingen data fundet.\nFormat: ${fmt}`);
       } else {
         setFormat(fmt); setPreview(rows.slice(0, 200)); setError(""); setStep("preview");
       }
@@ -333,20 +376,20 @@ function ImportModal({ onImport, onClose, onFtp }) {
           {error && <div className="import-error"><pre>{error}</pre></div>}
           <div className="import-sources">
             {[
-              ["🔵 TCX fil (anbefalet)", "Upload direkte fra Garmin Edge, Wahoo eller Zwift — TSS beregnes automatisk fra effekt eller puls"],
-              ["🟣 Intervals.icu CSV", "intervals.icu → Aktiviteter → ⋮ → Eksporter CSV"],
-              ["🔵 Garmin Connect CSV", "connect.garmin.com → Aktiviteter → Eksporter CSV"],
-              ["🟠 Strava", "strava.com → Indstillinger → Download dine data → activities.csv"],
+              ["🔵 TCX fil (anbefalet)", "Upload direkte fra Garmin Edge, Wahoo eller Zwift"],
+              ["🟣 Intervals.icu CSV", "Aktiviteter → ⋮ → Eksporter CSV"],
+              ["🔵 Garmin Connect CSV", "Aktiviteter → Eksporter CSV"],
+              ["🟠 Strava", "Indstillinger → Download dine data → activities.csv"],
             ].map(([title, desc]) => (
               <div key={title} className="import-source-card">
                 <div className="import-source-title">{title}</div>
-                <div style={{color:"#94a3b8",fontSize:12,marginTop:4}}>{desc}</div>
+                <div style={{color:"#94a3b8",fontSize:12,marginTop:3}}>{desc}</div>
               </div>
             ))}
           </div>
-          <div className="import-manual-note">💡 Simpel CSV: <code>date,tss</code> — én linje per dag</div>
+          <div className="import-manual-note">💡 Simpel CSV: <code>date,tss</code></div>
           <label className="btn-file-upload">
-            📂 Vælg fil (TCX, CSV eller TXT)
+            📂 Vælg fil (TCX eller CSV)
             <input ref={fileRef} type="file" accept=".csv,.txt,.tcx" onChange={handleFile} style={{display:"none"}} />
           </label>
           <button className="btn-cancel" onClick={onClose}>Annuller</button>
@@ -358,8 +401,8 @@ function ImportModal({ onImport, onClose, onFtp }) {
           </div>
           <div className="import-stats"><strong>{preview.length}</strong> træninger fundet</div>
           <div className="import-merge">
-            <label className="merge-opt"><input type="radio" name="merge" value="overwrite" checked={mergeMode==="overwrite"} onChange={()=>setMergeMode("overwrite")} />Overskriv eksisterende dage</label>
-            <label className="merge-opt"><input type="radio" name="merge" value="keep" checked={mergeMode==="keep"} onChange={()=>setMergeMode("keep")} />Behold eksisterende dage</label>
+            <label className="merge-opt"><input type="radio" name="merge" value="overwrite" checked={mergeMode==="overwrite"} onChange={()=>setMergeMode("overwrite")} />Overskriv eksisterende</label>
+            <label className="merge-opt"><input type="radio" name="merge" value="keep" checked={mergeMode==="keep"} onChange={()=>setMergeMode("keep")} />Behold eksisterende</label>
           </div>
           <div className="import-preview-list">
             {preview.slice(0,8).map((r,i) => (
@@ -384,29 +427,6 @@ function ImportModal({ onImport, onClose, onFtp }) {
           </div>
           <button className="btn-save" onClick={onClose}>Luk</button>
         </>)}
-      </div>
-    </div>
-  );
-}
-
-function LogModal({ row, onSave, onSkip }) {
-  const [tss, setTss] = useState(String(row.planTss || 0));
-  const [note, setNote] = useState(row.logNote || "");
-  return (
-    <div className="modal-overlay">
-      <div className="modal log-modal">
-        <div className="log-modal-header"><span className="log-badge">📋 Log træning</span><span className="log-date">{row.label}</span></div>
-        <div className="log-plan-box">
-          <div className="log-plan-label">Planlagt session</div>
-          <div className="log-plan-name">{row.planLabel}</div>
-          <div className="log-plan-tss">Plan TSS: <strong>{row.planTss || "—"}</strong></div>
-        </div>
-        <label className="log-field"><span>Faktisk TSS</span><input type="text" inputMode="decimal" value={tss} onChange={e => setTss(e.target.value)} autoFocus /></label>
-        <label className="log-field"><span>Note (valgfri)</span><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Føltes godt..." /></label>
-        <div className="modal-btns">
-          <button className="btn-save" onClick={() => { const n = parseFloat(tss.replace(",",".")); onSave({ tss: isNaN(n)?0:n, note }); }}>Gem ✓</button>
-          <button className="btn-skip" onClick={onSkip}>Spring over</button>
-        </div>
       </div>
     </div>
   );
@@ -535,7 +555,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
   const deleteLog = date => { const n = { ...logged }; delete n[date]; update("logged", n); };
   const handleImport = (rows, mode) => {
     const next = { ...logged };
-    rows.forEach(r => { if (mode === "keep" && next[r.date]) return; next[r.date] = { tss: r.tss, note: r.name && r.name !== "Importeret" ? r.name : "" }; });
+    rows.forEach(r => { if (mode === "keep" && next[r.date]) return; next[r.date] = { tss: r.tss, note: r.name && r.name !== "Importeret" && r.name !== "TCX aktivitet" ? r.name : "" }; });
     update("logged", next);
     setSaveMsg(`${rows.length} træninger importeret ✓`); setTimeout(() => setSaveMsg(""), 3000);
   };
@@ -564,7 +584,8 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
           <Stat label="W/kg krop"   value={(ftp/weight).toFixed(2)}       sub={`${ftp}W / ${weight}kg`} />
           <Stat label="W/kg system" value={(ftp/systemWeight).toFixed(2)} sub="inkl. cykel + dunke" />
           <Stat label="CTL · Fitness" value={todayRow?.ctl} color="#60a5fa" sub2="ATL · Træthed" value2={todayRow?.atl} color2="#f87171" />
-          <Stat label="TSB · Form" value={(todayRow?.tsb >= 0 ? "+" : "") + todayRow?.tsb}
+          <Stat label="TSB · Form"
+            value={(todayRow?.tsb >= 0 ? "+" : "") + todayRow?.tsb}
             color={todayRow?.tsb > 5 ? "#4ade80" : todayRow?.tsb < -5 ? "#f87171" : "#facc15"}
             sub={`Race TSB: ${(raceRow?.tsb >= 0 ? "+" : "") + raceRow?.tsb}`} />
         </div>
@@ -594,7 +615,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
             </div>
           </div>
           <div className="plan-info">
-            📅 Plan: <strong>{startDateStr}</strong> → <strong>{raceDateStr}</strong> · {planDays.length} dage · {Math.ceil(planDays.length/7)} uger · 4-ugers blokke med rolig uge · taper de sidste 2 uger
+            📅 Plan: <strong>{startDateStr}</strong> → <strong>{raceDateStr}</strong> · {planDays.length} dage · {Math.ceil(planDays.length/7)} uger · TSS fordeles dynamisk på aktive dage · weekend vægtes højere
           </div>
         </section>
 
@@ -648,7 +669,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
           {activeTab === "plan" && (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Dato</th><th>Session</th><th>Plan TSS</th><th>Logget TSS</th><th>CTL · Fitness</th><th>ATL · Træthed</th><th>TSB · Form</th><th></th></tr></thead>
+                <thead><tr><th>Dato</th><th>Session</th><th>Plan TSS</th><th>Logget TSS</th><th>CTL</th><th>ATL</th><th>TSB · Form</th><th></th></tr></thead>
                 <tbody>
                   {series.map((row, i) => (
                     <tr key={i} className={row.isMountain?"row-mountain":row.tss===0?"row-rest":row.logged?"row-logged":""}>
@@ -673,7 +694,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
                 <button className="btn-import-sm" onClick={() => setShowImport(true)}>📥 Importer TCX/CSV</button>
               </div>
               {Object.keys(logged).length === 0
-                ? <div className="empty-log">Ingen loggede træninger. Upload en TCX-fil eller klik + i plan-tabellen.</div>
+                ? <div className="empty-log">Ingen loggede træninger. Upload TCX via + knappen eller klik Importer.</div>
                 : <div className="log-list">
                     {Object.entries(logged).sort((a,b) => b[0].localeCompare(a[0])).map(([date, entry]) => {
                       const row = series.find(s => s.date === date);
@@ -698,7 +719,7 @@ function AppUI({ user, appState, update, syncing, saveMsg, setSaveMsg }) {
       </main>
 
       {showHelp         && <HelpModal onClose={() => setShowHelp(false)} />}
-      {logModal         && <LogModal row={logModal} onSave={e => saveLog(logModal.date, e)} onSkip={() => saveLog(logModal.date, {tss:logModal.planTss||0,note:""})} />}
+      {logModal         && <LogModal row={logModal} onSave={e => saveLog(logModal.date, e)} onSkip={() => saveLog(logModal.date, {tss:logModal.planTss||0,note:""})} ftp={ftp} />}
       {editingMountain  && <MountainModal mountain={editingMountain} onSave={saveMountain} onClose={() => setEditingMountain(null)} />}
       {showAddModal     && <MountainModal mountain={newMountainTemplate} onSave={addMountain} onClose={() => setShowAddModal(false)} />}
       {showImport       && <ImportModal onImport={handleImport} onClose={() => setShowImport(false)} onFtp={ftp} />}
@@ -832,7 +853,7 @@ const CSS = `
   .btn-save:hover { background: #1d4ed8; }
   .btn-cancel, .btn-skip { flex: 1; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 7px; padding: 9px; font-size: 14px; cursor: pointer; }
   .btn-cancel:hover, .btn-skip:hover { background: #334155; }
-  .log-modal { width: 380px; }
+  .log-modal { width: 400px; }
   .log-modal-header { display: flex; justify-content: space-between; align-items: center; }
   .log-badge { background: #1e3a5f; color: #7dd3fc; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 99px; }
   .log-date { font-size: 13px; color: #64748b; }
@@ -840,6 +861,8 @@ const CSS = `
   .log-plan-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
   .log-plan-name { font-size: 15px; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }
   .log-plan-tss { font-size: 12px; color: #94a3b8; }
+  .tcx-upload-btn { display: block; background: #1e293b; border: 1px dashed #334155; border-radius: 8px; padding: 11px 14px; font-size: 13px; color: #60a5fa; cursor: pointer; text-align: center; transition: all .15s; }
+  .tcx-upload-btn:hover { border-color: #60a5fa; background: #1e3a5f; }
   .log-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: .05em; }
   .log-field input { background: #1e293b; border: 1px solid #334155; border-radius: 7px; color: #e2e8f0; padding: 8px 10px; font-size: 15px; font-weight: 600; }
   .log-field input:focus { outline: none; border-color: #6366f1; }
