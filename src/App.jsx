@@ -107,9 +107,17 @@ function computeSeries(startCTL, startATL, startDate, planDays, mountains, restD
     const planDay = planDays[i] || { label: isRestDay ? "Fri 🚫" : "Z2 træning", tss: isRestDay ? 0 : 50 };
     const logEntry = logged[iso];
     let tss, planTss;
-    if (mtn)            { planTss = mtn.tss;    tss = logEntry ? logEntry.tss : mtn.tss; }
-    else if (isRestDay) { planTss = 0;           tss = 0; }
-    else                { planTss = planDay.tss; tss = logEntry ? logEntry.tss : planDay.tss; }
+    if (mtn) {
+      planTss = mtn.tss;
+      tss = logEntry ? logEntry.tss : mtn.tss;
+    } else if (isRestDay) {
+      planTss = 0;
+      // Logget træning bruges altid — selv på fridage (man kørte måske alligevel)
+      tss = logEntry ? logEntry.tss : 0;
+    } else {
+      planTss = planDay.tss;
+      tss = logEntry ? logEntry.tss : planDay.tss;
+    }
     ctl = ctl + (tss - ctl) / 42;
     atl = atl + (tss - atl) / 7;
     return {
