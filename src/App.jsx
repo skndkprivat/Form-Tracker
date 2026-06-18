@@ -198,6 +198,7 @@ function parseTCX(xmlText, ftp) {
       let totalPowerSum = 0, powerCount = 0;
       let totalHRSum = 0, hrCount = 0;
       let startTime = null, endTime = null;
+      const powerSamples = [];
 
       trackpoints.forEach(tp => {
         const time = tp.querySelector("Time")?.textContent;
@@ -208,7 +209,7 @@ function parseTCX(xmlText, ftp) {
         }
         const powerEl = tp.querySelector("Watts") ||
           [...tp.querySelectorAll("*")].find(el => el.localName === "Watts");
-        if (powerEl) { totalPowerSum += +powerEl.textContent; powerCount++; }
+        if (powerEl) { totalPowerSum += +powerEl.textContent; powerCount++; powerSamples.push(+powerEl.textContent); }
         const hrEl = tp.querySelector("Value");
         const hr = hrEl ? +hrEl.textContent : 0;
         if (hr > 30 && hr < 220) { totalHRSum += hr; hrCount++; }
@@ -223,8 +224,23 @@ function parseTCX(xmlText, ftp) {
       let tss = 0;
 
       if (powerCount > 10 && ftp > 0) {
-        const avgPower = totalPowerSum / powerCount;
-        const np = avgPower * 1.05;
+        // Beregn NP korrekt: 30-sekunders rullende gennemsnit^4, derefter ^0.25
+        // Fra TCX har vi enkeltpunkter — brug 30-punkters window (ca. 30 sek ved 1Hz)
+        const windowSize = 30;
+        let np = 0;
+        if (powerSamples.length >= windowSize) {
+          let sum4 = 0, count4 = 0;
+          for (let j = windowSize - 1; j < powerSamples.length; j++) {
+            const window = powerSamples.slice(j - windowSize + 1, j + 1);
+            const avg = window.reduce((a, b) => a + b, 0) / window.length;
+            sum4 += Math.pow(avg, 4);
+            count4++;
+          }
+          np = Math.pow(sum4 / count4, 0.25);
+        } else {
+          // Fallback hvis for få punkter
+          np = (totalPowerSum / powerCount) * 1.05;
+        }
         const IF = np / ftp;
         tss = Math.round((durationSec * np * IF) / (ftp * 3600) * 100);
       } else if (hrCount > 10) {
