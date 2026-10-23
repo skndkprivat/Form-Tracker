@@ -229,7 +229,7 @@ cd Form-Tracker
 cp .env.example .env
 # Udfyld værdierne i .env
 
-# Installer og kør
+# Installer og kør (kræver Node 22.23.4+, 24.22.1+ eller 26.12.1+)
 npm install
 npm run dev
 ```
